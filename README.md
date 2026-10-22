@@ -1,5 +1,8 @@
 # Taskly App Node
 
+Unit tests in this repository are maintained with the help of a custom test agent that runs on
+every pull request. See [SOLUTION.md](SOLUTION.md).
+
 ## Setup
 
 ```sh
