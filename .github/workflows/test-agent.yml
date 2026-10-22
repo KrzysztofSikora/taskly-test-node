@@ -1,0 +1,259 @@
+name: test-agent
+
+# Runs the test-writer agent on pull requests: it analyses the change, creates or updates unit
+# tests, and the workflow verifies them independently before committing them to the PR branch
+# and posting a report comment.
+#
+# Trust model (details in SOLUTION.md, "Security"):
+#   agent   - has the Claude token (environment `claude-agent`, required reviewer), read-only
+#             repo token, no push credentials. Runs only for same-repo PRs opened/pushed by the
+#             repository owner. Its only output is a patch artifact.
+#   verify  - no secrets, read-only. Checks the patch against the path policy with tooling taken
+#             from before the patch, then type-checks, tests and measures coverage.
+#   publish - write token, runs no repository code: applies the verified patch, pushes, comments.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'backend/src/**'
+      - 'frontend/src/**'
+
+permissions: {}
+
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.308
+  NODE_VERSION: 22
+
+jobs:
+  agent:
+    name: Agent
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor == github.repository_owner &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-test-agent')
+    runs-on: ubuntu-latest
+    environment: claude-agent
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          (cd backend && npm ci --ignore-scripts && npx prisma generate)
+          (cd frontend && npm ci --ignore-scripts)
+
+      - name: Baseline coverage
+        run: |
+          mkdir -p .test-agent
+          node .claude/skills/test-verification/scripts/run-tests.mjs backend coverage > .test-agent/before-backend.json || true
+          node .claude/skills/test-verification/scripts/run-tests.mjs frontend coverage > .test-agent/before-frontend.json || true
+          node -e 'const r=(f)=>{try{return JSON.parse(require("fs").readFileSync(f))}catch{return null}};require("fs").writeFileSync(".test-agent/coverage-before.json",JSON.stringify({backend:r(".test-agent/before-backend.json"),frontend:r(".test-agent/before-frontend.json")}))'
+
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Check credentials
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::Secret CLAUDE_CODE_OAUTH_TOKEN is not set in the claude-agent environment (see SOLUTION.md)."
+            exit 1
+          fi
+
+      - name: Run test-writer
+        id: agent
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          BASE_REF: origin/${{ github.base_ref }}
+        run: scripts/test-agent/run-agent.sh pr "$BASE_REF" .test-agent
+
+      - name: Collect patch
+        if: always()
+        run: |
+          git add --all
+          git diff --cached --binary > .test-agent/agent.patch
+          git diff --cached --stat
+          rm -f .test-agent/before-*.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-agent-run
+          path: .test-agent/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
+
+  verify:
+    name: Verify
+    needs: agent
+    if: always() && (needs.agent.result == 'success' || needs.agent.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    outputs:
+      outcome: ${{ steps.outcome.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-run
+          path: .test-agent
+
+      # Snapshot the gate tooling before the patch touches the tree, so a patch cannot change
+      # the rules it is checked against.
+      - name: Apply patch and check policy
+        id: check
+        run: |
+          trusted="$RUNNER_TEMP/trusted"
+          mkdir -p "$trusted/scripts" && cp -r scripts/test-agent "$trusted/scripts/"
+          applied=true
+          if [ -s .test-agent/agent.patch ]; then
+            git apply --index .test-agent/agent.patch || applied=false
+          fi
+          if [ "$applied" = true ]; then
+            node "$trusted/scripts/test-agent/check-patch.mjs" --json > .test-agent/check.json || true
+          else
+            echo '{"ok":false,"files":[],"changed_lines":0,"errors":["the patch does not apply to the PR head"],"warnings":[]}' > .test-agent/check.json
+          fi
+          cat .test-agent/check.json
+          echo "ok=$(node -p 'require("./.test-agent/check.json").ok')" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          (cd backend && npm ci --ignore-scripts && npx prisma generate)
+          (cd frontend && npm ci --ignore-scripts)
+
+      - name: Type check, tests and coverage
+        id: verify
+        if: steps.check.outputs.ok == 'true'
+        continue-on-error: true
+        run: |
+          git diff --cached --name-only > "$RUNNER_TEMP/changed.txt"
+          xargs -a "$RUNNER_TEMP/changed.txt" node scripts/test-agent/verify.mjs .test-agent/verify.json
+
+      - name: Decide outcome
+        id: outcome
+        env:
+          CHECK_OK: ${{ steps.check.outputs.ok }}
+          VERIFY: ${{ steps.verify.outcome }}
+        run: |
+          if [ ! -f .test-agent/report.json ]; then outcome=agent_failed
+          elif [ "$CHECK_OK" != true ] || [ "$VERIFY" != success ]; then outcome=rejected
+          elif [ ! -s .test-agent/agent.patch ]; then outcome=no_changes
+          else outcome=committed
+          fi
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          echo "Outcome: $outcome"
+
+      - name: Render report
+        env:
+          OUTCOME: ${{ steps.outcome.outputs.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node -e 'require("fs").writeFileSync(".test-agent/context.json", JSON.stringify({ outcome: process.env.OUTCOME, commit: "{{COMMIT}}", run_url: process.env.RUN_URL, head_sha: process.env.HEAD_SHA }))'
+          node "$RUNNER_TEMP/trusted/scripts/test-agent/render-report.mjs" .test-agent > .test-agent/comment.md
+          cat .test-agent/comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-agent-verified
+          path: |
+            .test-agent/comment.md
+            .test-agent/check.json
+            .test-agent/verify.json
+          include-hidden-files: true
+          retention-days: 14
+
+  publish:
+    name: Publish
+    needs: verify
+    if: always() && needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUTCOME: ${{ needs.verify.outputs.outcome }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      # Only git and gh run here; no repository code is executed with the write token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-run
+          path: ${{ runner.temp }}/run
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-verified
+          path: ${{ runner.temp }}/verified
+
+      - name: Commit verified tests
+        if: env.OUTCOME == 'committed'
+        run: |
+          comment="$RUNNER_TEMP/verified/comment.md"
+          git apply --index "$RUNNER_TEMP/run/agent.patch"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "test(agent): add unit tests for #${PR}" -m "Generated by the test-writer agent and verified in CI (type check, tests, coverage, path policy)."
+          # A plain (fast-forward only) push is rejected if the branch moved since the agent ran.
+          if git push origin "HEAD:refs/heads/${HEAD_REF}"; then
+            sed -i "s/{{COMMIT}}/$(git rev-parse --short HEAD)/" "$comment"
+          else
+            sed -i "s/^✅ Tests verified and committed to this branch.*$/⚠️ Tests were verified but could not be pushed: the branch moved since the agent ran. Re-run the workflow, or apply the patch from the run artifacts./" "$comment"
+          fi
+
+      - name: Post report comment
+        run: |
+          comment="$RUNNER_TEMP/verified/comment.md"
+          id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- test-agent-report -->")))][0].id // empty')
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F "body=@${comment}" > /dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F "body=@${comment}" > /dev/null
+          fi

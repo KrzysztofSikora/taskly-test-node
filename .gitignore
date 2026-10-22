@@ -21,3 +21,6 @@ coverage/
 
 # macOS
 .DS_Store
+
+# Test agent run output
+.test-agent/
