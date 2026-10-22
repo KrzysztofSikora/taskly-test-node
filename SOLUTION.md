@@ -1,313 +1,140 @@
 # Unit test agent and PR workflow
 
-A custom **Claude Code** agent, `test-writer`, with four reusable skills. It analyses a change,
-decides per source file whether unit tests must be created, updated or skipped, writes Vitest
-tests for the Express/Prisma backend and the React frontend, and verifies them by running them.
-A GitHub Actions workflow runs it on every pull request. The workflow re-verifies the result
-without trusting the agent, commits the tests to the PR branch, and posts a report comment
-on the PR.
+A custom **Claude Code** agent, `test-writer`, with four reusable skills. On every pull request
+it decides per changed source file whether unit tests must be created, updated or skipped,
+writes Vitest tests for the backend (Express + Prisma) and the frontend (React), and runs them.
+GitHub Actions then re-verifies the result without trusting the agent, commits the tests to
+the PR branch and posts a report on the PR. Full details:
+[docs/test-agent.md](docs/test-agent.md).
 
 ```
-pull request ──▶ agent job ───────────────▶ verify job ───────────────▶ publish job
- (owner, same     Claude token, read-only     no secrets, read-only      write token, runs no
-  repo, not        repo token, no push         policy check of the        repo code: git apply,
-  draft)           credentials                 patch, type check, tests,  commit, push, comment
-                   analyse ▸ write ▸ verify    coverage, Prettier
-                   ▸ report.json + patch
+pull request ─▶ Agent ─────────────────────▶ Verify ──────────────────▶ Publish
+               Claude token, read-only repo   no secrets: path policy,   write token, no repo code:
+               token, cannot push             type check, tests,         commit tests, start CI,
+               analyse ▸ write ▸ run ▸ report coverage, Prettier         post the PR comment
 ```
 
-| Where | What |
-|-------|------|
-| `.claude/agents/test-writer.md` | The custom agent: role, procedure, hard rules, tool allowlist, preloaded skills |
-| `.claude/skills/pr-change-analysis/` | Skill + script: what changed, what is testable, which test owns it, the create/update/skip decision |
-| `.claude/skills/backend-unit-tests/` | Skill: conventions and recipes for Express routers, Prisma repositories, config, lifecycle |
-| `.claude/skills/frontend-unit-tests/` | Skill: conventions and recipes for components, TanStack Query hooks, fetch wrapper, pure utils |
-| `.claude/skills/test-verification/` | Skill + script: run, fix loop, flakiness, type check, Prettier, coverage, bug classification |
-| `.claude/hooks/guard.mjs` | PreToolUse guard: writes only to test files, allowlisted commands, no secrets |
-| `scripts/test-agent/` | Runner (`run-agent.sh`), settings, report schema, path policy, CI patch check, verification, PR comment renderer, and their tests |
-| `.github/workflows/test-agent.yml` | The agentic PR workflow |
-| `.github/workflows/ci.yml` | Regular CI: both projects plus the agent tooling tests |
+## Where the agent and skills are defined, and how they are used
+
+| File | Role during a run |
+|------|-------------------|
+| `.claude/agents/test-writer.md` | The custom agent: procedure, hard rules, tool allowlist. It preloads the four skills. |
+| `.claude/skills/pr-change-analysis/` | Runs `analyze-changes.mjs`, which lists the changed files, whether each is testable, the test that owns it (resolved from imports), where it is mocked, the changed lines and coverage. The agent then decides `create` / `update` / `skip` / `deferred` / `blocked`. |
+| `.claude/skills/backend-unit-tests/` | Repo conventions and recipes: Supertest with a fake repository, Prisma delegates spied without a database, `vi.stubEnv`. |
+| `.claude/skills/frontend-unit-tests/` | Mocked design system, user-event, `renderHook` with a `QueryClientProvider`, a stubbed `fetch`, fake timers. |
+| `.claude/skills/test-verification/` | Runs tests only through `run-tests.mjs` (scrubbed environment, compact JSON). Fixes failing tests within 3 attempts, then runs a 3× shuffled flakiness check, type check, Prettier and full coverage. A test that exposes a production bug is held back and reported, never adjusted to the bug. |
+| `.claude/hooks/guard.mjs`, `scripts/test-agent/policy.mjs` | One path policy shared by the analysis, the guard hook and the CI check. The agent may write only test files and may run only allowlisted commands. |
+| `scripts/test-agent/` | `run-agent.sh` (headless runner, also used locally), report schema, `check-patch.mjs`, `verify.mjs`, `render-report.mjs`, plus tests for all of them. |
+| `.github/workflows/test-agent.yml`, `ci.yml` | The PR workflow, and regular CI. |
+
+`run-agent.sh` starts `claude -p --agent test-writer` with a permission allowlist (`dontAsk`),
+the guard hook, a turn budget and `--json-schema`. The agent must end with a structured report:
+a decision and reason per file, behaviours covered, skills used, suspected bugs and findings.
+The PR comment is rendered from that report, next to the independent CI results.
 
 ## Main technical decisions
 
-**Claude Code, run headless with `--agent`.** The task asks for a custom agent with reusable
-skills. Claude Code has both as first-class files in the repo (`.claude/agents`,
-`.claude/skills`), so the same agent works interactively (`claude --agent test-writer`, or as a
-subagent) and in CI (`claude -p --agent test-writer`). I run the CLI directly rather than
-through `anthropics/claude-code-action`. That keeps the job read-only and pins the exact CLI
-version, permission mode, tool list, turn limit and output schema in one script. It also lets
-me run the identical command locally (`scripts/test-agent/run-agent.sh`).
+- **Claude Code agent and skills as files in the repo.** The same agent runs interactively, as
+  a subagent, and headless in CI. I call the CLI directly, not `claude-code-action`, so the
+  version, permissions, tools, limits and output schema are pinned in one script and the agent
+  job stays read-only.
+- **Skills split by responsibility.** Analysis, backend, frontend and verification each change
+  for different reasons. Each one encodes the conventions of this repo's existing tests, so the
+  generated tests look like the team's own.
+- **Scripts provide facts, the model provides judgement.** Change analysis, test mapping,
+  coverage and test results come from deterministic scripts. The model decides what is worth
+  testing and how.
+- **Don't trust the agent.** Verification runs in a separate job without the token. Only a
+  patch that touches test files alone and passes the full suites is committed.
+- **Defence in depth.** Tool allowlist → permission allowlist → PreToolUse guard → CI patch
+  check (run from tooling copied before the patch is applied). Tests run with a scrubbed
+  environment, so test code never sees the token. The token is an environment secret, and runs
+  only happen for same-repo PRs by the owner (fork PRs get no secrets). There are no
+  `pull_request_target` or comment triggers. Actions are pinned by SHA, the CLI by version,
+  and dependencies are installed with `npm ci --ignore-scripts`. Turn, time and concurrency
+  limits apply.
+- **Commit on the PR branch** (fast-forward only), so the tests sit next to the change and can
+  be dropped with one revert.
 
-**Skills split by responsibility, not by step.** Analysis, backend writing, frontend writing and
-verification each change for different reasons. The test conventions of one project should not
-leak into the other, and the verification rules apply to both. Each skill carries the repo's
-real conventions, read from the existing tests: flat `it` blocks, mocked design system,
-Supertest with a fake repository, Prisma delegates spied without a database. Without them the
-agent writes generic tests that look foreign in this codebase.
+## How to run the PR workflow, and prerequisites
 
-**Deterministic facts, model judgement.** Scripts give the agent facts: changed files and lines,
-the test file that owns a source (resolved from real imports, not file names), where a module
-is mocked, current coverage, compact test results. The model only decides what is worth testing
-and how. The same path policy (`scripts/test-agent/policy.mjs`) drives the analysis, the guard
-hook and the CI check, so they cannot drift apart. Exclusions mirror the coverage config of
-both Vitest setups.
+1. Create a token with `claude setup-token` (Claude Pro/Max), or use an Anthropic API key
+   (`ANTHROPIC_API_KEY` in the *Run test-writer* step).
+2. *Settings → Environments* → create `claude-agent` **before the first run**, and add the
+   environment secret `CLAUDE_CODE_OAUTH_TOKEN`. Optionally add a required reviewer, so that
+   every run waits for approval.
+3. Open a non-draft PR from a branch of this repository that changes `backend/src` or
+   `frontend/src`. *Agent → Verify → Publish* run automatically. The result is a commit
+   `test(agent): add unit tests for #N` and a **Test agent report** comment, updated on each
+   push. To opt a PR out, use the label `skip-test-agent`.
 
-**Structured report.** The agent must end with JSON that matches
-`scripts/test-agent/report-schema.json` (`--json-schema`). Every analysed file gets a decision
-and a reason, and the report adds behaviours covered, skills used, suspected bugs and findings.
-The PR comment is rendered from it by a plain script. The model never writes Markdown that goes
-straight into the PR.
-
-**Don't trust the agent's results.** The agent's claims ("tests pass, coverage went up") are
-shown next to an independent CI run in a job that has no access to the Claude token. Only
-tests that pass that run are committed.
-
-**Never encode a bug.** When a test reveals that production code contradicts its own contract,
-the agent keeps that test out of the suite and reports it as a suspected bug, with the test it
-held back. It never edits production code and never adjusts the expectation to match the bug.
-
-**Commit to the PR branch, not a second PR.** For a test-generation bot, a commit on the PR
-branch keeps tests next to the change they cover, and the author can drop it with one revert.
-The commit is fast-forward only, so if the author pushed in the meantime nothing is
-overwritten. The comment says so and the patch stays in the run artifacts.
-
-## Security
-
-The evaluation weighs this heavily, and the workflow runs a model with write access to a
-repository, so the agent is constrained at several independent layers:
-
-| Threat | Mitigation |
-|--------|------------|
-| Someone else triggers runs on my Claude subscription | Runs only for non-draft PRs whose head branch is in this repo **and** whose triggering actor is the repo owner. Fork PRs get no secrets under `pull_request`. The token is an **environment secret** of `claude-agent` with a **required reviewer**, so every run waits for my approval. No `pull_request_target`, no comment triggers. |
-| Agent edits production code, configs, workflows or itself | 1) tool allowlist in the agent (`Read, Write, Edit, Bash, StructuredOutput`); 2) permission allowlist in `scripts/test-agent/claude-settings.json` with `dontAsk` mode; 3) PreToolUse guard (`.claude/hooks/guard.mjs`) that denies writes outside test paths; 4) `check-patch.mjs` in the verify job rejects any non-test path, deleted/renamed tests, `.only`/`.skip`/`.todo`/`it.fails`, and oversized patches. Layer 4 runs from a copy of the tooling taken **before** the patch is applied. |
-| Agent exfiltrates the token (e.g. via prompt injection in PR content) | Shell access is limited to two skill scripts and read-only git: no pipes, chaining, substitution, redirects, `npm`/`npx`/`curl`, network tools or `.env`. Tests run through `run-tests.mjs`, which starts every child process with a scrubbed environment (no `CLAUDE_*`, `GITHUB_*`), so test code never sees the token. The agent job has a read-only `GITHUB_TOKEN` and `persist-credentials: false`, and `run-agent.sh` starts Claude under `env -i` with only the variables it needs. Skills and the agent prompt state that PR content is data, not instructions, and that suspicious instructions are reported. |
-| Agent "passes" by weakening tests | Forbidden by the rules, rejected by `check-patch` (skips, focus, `it.fails`, deletions), and reported as a warning when assertions disappear from an existing test. The verify job runs the **full** suite with the existing coverage thresholds. |
-| Write token misused | Only the `publish` job has `contents: write` / `pull-requests: write` / `actions: write`, and it executes no repository code: `git apply`, `git commit`, `git push`, `gh api`, `gh workflow run`. Pushes made with `GITHUB_TOKEN` do not trigger workflows, so there are no loops. CI for the bot commit is started explicitly with `workflow_dispatch` (only `ci.yml`, never the agent). |
-| Supply chain | Actions pinned by commit SHA. Claude Code pinned to an exact version. `npm ci --ignore-scripts` everywhere, with `prisma generate` as the only explicit build step. |
-| Runaway cost or hangs | Turn limit (`--max-turns`, PR: 80), CLI timeout (25 min) and job timeout (40 min). `concurrency` cancels a running agent when the PR gets a new push. The `paths` filter skips PRs that do not touch `backend/src` or `frontend/src`. The `skip-test-agent` label opts a PR out. |
-
-One finding from building this: hooks declared in an agent's frontmatter apply when the agent
-runs as a **subagent**, but not when it is the main session (`claude --agent`). I verified this
-with a forced write to `backend/src`, which went through. The guard is therefore also
-registered in `scripts/test-agent/claude-settings.json`, which `run-agent.sh` always passes,
-and the frontmatter copy covers interactive subagent use.
-
-## Running it
-
-### Prerequisites (one-time, repository owner)
-
-1. **Claude token.** On your machine: `claude setup-token` (Pro/Max subscription) and copy
-   the token. An Anthropic API key works too: set `ANTHROPIC_API_KEY` instead and add it
-   to the `env` of the *Run test-writer* step.
-2. **Environment.** *Settings → Environments → New environment* `claude-agent`:
-   - *Required reviewers*: yourself (each run then waits for your approval; remove it for
-     fully automatic runs),
-   - *Deployment branches*: all branches (PR branches must be allowed),
-   - *Environment secret* `CLAUDE_CODE_OAUTH_TOKEN` = the token.
-
-   Create the environment **before** the first run. GitHub creates a missing environment
-   automatically, without protection rules.
-3. **Workflow permissions.** *Settings → Actions → General → Workflow permissions*:
-   "Read repository contents" is enough. Jobs request `contents: write` /
-   `pull-requests: write` explicitly where needed.
-
-### On a pull request
-
-Open a PR (not a draft) from a branch of this repository that changes `backend/src/**` or
-`frontend/src/**`. Then:
-
-1. *test-agent / Agent* waits for approval in the `claude-agent` environment. Approve it.
-2. The agent runs (typically 5–20 minutes) and uploads `test-agent-run`: the patch, report,
-   metadata and full transcript.
-3. *Verify* applies the patch, checks the policy, type-checks, runs both suites with coverage
-   and renders the comment (also in the job summary).
-4. *Publish* commits the tests to the PR branch as `github-actions[bot]` (only if verification
-   passed) and creates or updates the **Test agent report** comment.
-
-Every new push to the PR re-runs the cycle and updates the same comment. To opt a PR out, add
-the label `skip-test-agent`. It applies to events after the label is set: a label added by
-`gh pr create --label` arrives just after the `opened` event, so for the first run just reject
-the environment approval.
-
-### Locally
-
-```bash
-(cd backend && npm ci) && (cd frontend && npm ci)
-scripts/test-agent/run-agent.sh pr origin/main     # tests for the current branch's changes
-scripts/test-agent/run-agent.sh all                # backfill missing tests across the repo
-git add -A && node scripts/test-agent/check-patch.mjs
-node scripts/test-agent/verify.mjs .test-agent/verify.json $(git diff --cached --name-only)
-node scripts/test-agent/render-report.mjs .test-agent
-```
-
-It uses your local Claude Code login unless `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
-is set. Interactively: `claude --agent test-writer --settings scripts/test-agent/claude-settings.json`.
-
-Tests for the tooling itself: `node --test 'scripts/test-agent/tests/*.test.mjs'` (also in CI).
-
-## How the agent and skills are used during a run
-
-`run-agent.sh` starts `claude -p --agent test-writer` with a short task ("Mode: pull request.
-Base ref: origin/main …"). The agent's prompt replaces the default system prompt, and its
-`skills:` frontmatter preloads all four skills into its context, so the procedure is there
-from the first turn:
-
-1. **pr-change-analysis**: runs `analyze-changes.mjs --base origin/main` and gets JSON with
-   each changed file, whether it is testable (and why not), `own_test` / `target_test`,
-   `mocked_in`, changed line ranges and current coverage. It then reads the diffs and decides
-   `create` / `update` / `skip` / `blocked` per file and writes a short plan.
-2. **backend-unit-tests / frontend-unit-tests**: for each file to test, it reads the closest
-   existing test and the recipes (Supertest + fake repository, `vi.spyOn` on Prisma
-   delegates, `renderHook` + `QueryClientProvider`, `vi.stubGlobal('fetch')`, fake timers)
-   and writes the test.
-3. **test-verification**: runs each file through `run-tests.mjs` (compact JSON, scrubbed env).
-   It fixes test problems within 3 attempts and classifies real contradictions as suspected
-   bugs. Then it runs the shuffled flakiness check, type check, Prettier, and the full suite
-   with coverage.
-4. The agent returns the report through the `StructuredOutput` tool. `extract-result.mjs`
-   writes it to `report.json`, plus `meta.json` with turns, duration, tool calls and calls
-   denied by the guard.
+Locally: `scripts/test-agent/run-agent.sh pr origin/main` (or `all` for backfill), then
+`check-patch.mjs` and `verify.mjs`. Tooling tests: `node --test 'scripts/test-agent/tests/*.test.mjs'`.
 
 ## Example runs
 
-### 1. Backfill of the existing code (`run-agent.sh all`)
+**Backfill of the existing code** (two `run-agent.sh all` runs, each verified independently):
 
-The base repository had tests for part of the code. The agent ran twice in backfill mode, and
-each result was checked with `check-patch.mjs`, `verify.mjs` and a 3× shuffled run per file
-before committing (commits `test: backfill … (pass 1)` and `(pass 2)`).
+| | Before | After |
+|---|---|---|
+| Backend: tests, lines / branches | 48, 33.0% / 33.3% | 78, **97.2% / 97.9%** |
+| Frontend: tests, lines / branches | 18, 47.7% / 43.8% | 90, **99.3% / 97.1%** |
 
-| | Before | After pass 1 | After pass 2 |
-|---|---|---|---|
-| Backend tests | 48 | 70 | 78 |
-| Backend coverage, lines / branches | 33.0% / 33.3% | 78.0% / 93.8% | **97.2% / 97.9%** |
-| Frontend tests | 18 | 54 | 90 |
-| Frontend coverage, lines / branches | 47.7% / 43.8% | 82.1% / 70.1% | **99.3% / 97.1%** |
-| Agent session | | 55 turns, 140 s | 60 turns, 190 s |
+The first run stopped after 55 of 150 turns and skipped the flakiness check. The fix: the task
+now states the turn budget, and `deferred` and `flaky_check` are part of the report. After it,
+every file passed the shuffled runs.
 
-**Decisions (pass 1, 32 testable files):**
-- 10 `create`: `health.ts`, `config.ts`, `factory.ts`, `lib/http.ts`, all six TanStack Query
-  hooks.
-- 4 `update`: `router.ts` (only list/create were tested), `api/todos.ts`, `utils/todos.ts`,
-  `useNotice.ts`.
-- `skip` for the files already at 100%.
+**[PR #2](https://github.com/KrzysztofSikora/taskly-test-node/pull/2)** adds "Clear all
+completed tasks" across both projects, deliberately without test changes. It breaks
+`router.test.ts` and `TodosHeader.test.tsx` (type errors) and 11 tests in `TodosPage.test.tsx`.
+[Agent run](https://github.com/KrzysztofSikora/taskly-test-node/actions/runs/39819922506):
+`claude-sonnet-5-5`, 38 turns, 98 s.
 
-Pass 2 took the remaining components and `database.ts` / `lifespan.ts` (4 `create`,
-6 `update`). Every file passed the flakiness check.
-
-**Skills:** `pr-change-analysis` ranked uncovered files with `--all`. `backend-unit-tests` and
-`frontend-unit-tests` provided the recipes. For example, `factory.test.ts` covers malformed
-JSON → 422, oversized body → 413, unknown route → 404, rejected DB call → 500;
-`http.test.ts` covers abort vs. network failure; the hook tests check cache contents after
-`mutateAsync`. `test-verification` ran targeted runs, then type check, Prettier and full
-coverage.
-
-**What the first run taught me** (fixed in `feat(test-agent): deferred decision, turn budget…`):
-- The agent stopped after 55 of 150 turns, citing "budget".
-- It labelled unfinished files `skip`.
-- It did not run the flakiness check, though it admitted this in `findings`.
-
-Since then the task states the turn budget, `deferred` is its own decision, and `flaky_check`
-is part of the report schema. The second run used its budget properly and checked every
-file. Small convention slips remain (a `describe` block in a new backend file where the
-neighbours are flat), which is why the skills now say "match the file you extend" and why
-review of the bot commit stays part of the process.
-
-### 2. Pull request with a new feature (the agentic workflow)
-
-[PR #2](../../pull/2) adds "Clear all completed tasks" across both projects. A new
-`DELETE /api/todos/completed` route (registered before `/:id`), `TodoStore.deleteCompleted()`,
-`todosApi.clearCompleted()`, `useClearCompletedMutation` and a "Clear completed (n)" button in
-`TodosHeader`, wired up in `TodosPage`. It deliberately ships **without test changes**, and the
-interface changes break existing tests: a type error in `router.test.ts` (fake repository lacks
-`deleteCompleted`) and in `TodosHeader.test.tsx` (new required props), and 11 failing tests in
-`TodosPage.test.tsx` (the new hook needs a `QueryClient`).
-
-**Agent run** ([workflow run](../../actions/runs/39819922506)): `claude-sonnet-5-5`, 38 turns,
-98 s; one command denied by the guard, then retried within policy.
-
-| File | Decision | What the agent did |
-|------|----------|--------------------|
-| `hooks/useClearCompletedMutation.ts` | create | completed tasks are removed from the cache; an empty cache is left alone; the cache is kept when the request fails |
-| `backend/.../repository.ts` | update | `deleteCompleted` calls `deleteMany({ where: { completed: true } })` and returns the count |
-| `backend/.../router.ts` | update | added `deleteCompleted` to the fake repository; `DELETE /completed` → `200 { deleted }` **and does not reach `repository.delete`**, so the route-order risk is pinned |
-| `api/todos.ts` | update | `clearCompleted` sends `DELETE /todos/completed` |
-| `components/TodosHeader.tsx` | update | existing test given the new props; button hidden at 0, shows the count, calls back, disabled while busy |
-| `TodosPage.tsx` | update | mocked the new hook (fixes the 11 failures); count passed to the header, singular/plural notice, no notice on failure, ignored while busy, error in the alert, retry resets the mutation |
-| `openapi.json`, `types.ts`, `queryKeys.ts` | not_testable | schema document, type declarations, constants |
-
-All six test files passed the 3× shuffled flakiness check. The agent's report
-also noted that it formatted only the frontend files (the backend has no formatter).
-
-**Independent verification** (job *Verify*, no secrets): policy check passed (6 test files,
-220 changed lines). Type check clean in both projects. **Backend 80/80, frontend 102/102.**
-Coverage: backend lines 94.7% → 97.3%; every targeted file at 100% lines, except
-`TodosPage.tsx` at 97%. *Publish* committed the tests as `github-actions[bot]`
-(`test(agent): add unit tests for #2`) and posted the report comment on the PR. I then pulled
-the bot commit and re-ran `verify.mjs` locally with the same result.
-
-**What this run surfaced and how I fixed it:**
-- The first attempt on this PR failed in 0 s. The token secret contained a wrapped line
-  (`Invalid Authorization header value … contains a line break`). The pipeline behaved
-  correctly: nothing was committed and the verification table was shown. But the comment said
-  "success, unknown model" and repeated 11 stack traces. Fixed in #3: whitespace is stripped
-  from tokens, the CLI error is shown, and identical failures are grouped.
-- "Before" coverage for the frontend was `n/a`, because Vitest does not write the summary when
-  tests fail, and on this PR they did. Fixed with `--coverage.reportOnFailure`.
-- The bot commit did not start CI, so `ci` stayed red on the PR's previous head. Fixed by
-  dispatching `ci.yml` after the push.
+- **Decisions:** `create` for the new `useClearCompletedMutation` hook. `update` for
+  `repository`, `router`, `api/todos`, `TodosHeader` and `TodosPage`: it repaired all three
+  broken tests and added the new behaviour, including that `DELETE /completed` never reaches
+  `delete(:id)`, which pins the route order. `not_testable` for `openapi.json`, `types.ts` and
+  `queryKeys.ts`.
+- **Skills used:** all four. Analysis decided per file, the two writing skills supplied the
+  recipes, and verification ran the targeted, flakiness, type, format and coverage runs.
+- **Results:** independent *Verify* found 6 test files, only test paths, clean types,
+  **backend 80/80, frontend 102/102**. Backend lines went from 94.7% to 97.3%, and the targeted
+  files are at 100% (`TodosPage` 97%). *Publish* committed the tests and CI went green.
+- **Second run** on the same PR, after a rebase: every change was already covered, so the
+  decision was `no_changes`. No commit was made, and the same comment was updated.
+- **What the runs surfaced** (fixed in #3 and #4): a token pasted with a line break (now
+  stripped and reported clearly), missing baseline coverage when the PR's tests fail
+  (`--coverage.reportOnFailure`), and no CI on the bot commit (*Publish* now dispatches
+  `ci.yml`).
 
 ## Assumptions
 
-- Only the repository owner opens PRs that should consume the owner's Claude subscription.
-  Outside contributors are not served automatically. They can fork and use their own token.
-- "Unit tests" means fast tests without a database or network, which is how the existing
-  suites are written (Prisma is spied, not connected). Integration tests against PostgreSQL
-  are out of scope for the agent.
-- The repo's coverage configuration is the authority on what is worth testing. The agent
-  skips what Vitest excludes (types, barrels, design system, stories, entry points).
-- Committing to the PR branch is acceptable to the PR author. The commit is a separate,
-  revertible commit by `github-actions[bot]`.
-- Frontend formatting is enforced with Prettier (`format:check`). Two files in the base repo
-  failed it, and I formatted them in a separate commit so CI starts green.
+- Only the repository owner's PRs may use the owner's Claude token. Others can fork and use
+  their own.
+- "Unit tests" means no database or network, matching the existing suites (Prisma is spied,
+  not connected).
+- The Vitest coverage configuration defines what is worth testing (types, barrels, design
+  system and entry points are excluded).
+- A separate bot commit on the PR branch is acceptable to the author.
 
 ## Limitations
 
-- **The model decides what to test.** The policy and CI guarantee *safety* and that tests
-  *pass*. They cannot guarantee the tests are *meaningful*. The skills push towards
-  behavioural assertions, and the comment lists the behaviours covered for review. Mutation
-  testing would measure it (see below).
-- **CI on the bot commit runs through `workflow_dispatch`.** Pushes made with `GITHUB_TOKEN`
-  do not start workflows, so *Publish* dispatches `ci.yml` for the PR branch after pushing.
-  The resulting check belongs to the commit, but it is a `workflow_dispatch` run, not a
-  `pull_request` run. Branch protection that requires `pull_request` checks would need a
-  GitHub App token instead (see below).
-- **Command filtering is pattern-based.** The guard and allowlist match command text. They
-  are strong for this narrow command set, but the real boundary is the CI job itself: an
-  ephemeral runner with a read-only token, a scrubbed environment for tests, and no push
-  credentials.
-- **Subscription limits.** With a Pro token, runs share the owner's usage limits. Very large
-  PRs may hit the turn limit. The agent is told to finish what it has and report the rest.
-- **Required reviewer approval** makes the workflow semi-automatic by design. Removing it
-  makes it fully automatic, with the remaining guards.
-- **Heuristic test mapping.** The owning test is found from relative imports and file name
-  conventions. Path aliases or re-exported modules would need resolver support.
+- CI guarantees the tests are safe and pass, not that they are meaningful. The comment lists
+  the covered behaviours for review.
+- Command filtering matches text. The real boundary is the ephemeral, read-only CI job.
+- The bot's CI runs as `workflow_dispatch`, not `pull_request`, which matters for branch
+  protection rules.
+- A Pro token shares the owner's usage limits. Very large PRs may hit the turn budget, and the
+  remaining files are then reported as `deferred`.
+- Test mapping relies on relative imports and naming conventions. Path aliases would need
+  resolver support.
 
 ## What I would change for production
 
-- **A GitHub App** instead of `GITHUB_TOKEN` for publishing, so the bot commit triggers the
-  regular `pull_request` CI and shows a proper identity. A check run with annotations instead of, or in addition to,
-  the comment.
-- **Network egress control** for the agent job (allowlist only the Anthropic API and the npm
-  registry), e.g. with a hardened runner, so command filtering is not the main line of
-  defence.
-- **Mutation testing of generated tests** (StrykerJS on the changed files), with the score in
-  the report. That measures whether the new tests would catch a real bug, not only whether
-  they execute the code.
-- **API key with a spend cap** on a dedicated workspace (`--max-budget-usd`) instead of a
-  personal subscription, and per-PR cost in the report.
-- **Evaluation set for the agent**: fixed PRs with known expected decisions and seeded bugs,
-  run on every change to the agent or skills, to catch regressions in its judgement.
-- **Coverage gate on changed lines** (diff coverage) as a required check, independent of
-  the agent.
-- **Caching**: reuse the `node_modules` and baseline coverage of the base commit across PR
-  runs.
+- A GitHub App identity instead of `GITHUB_TOKEN` (normal PR CI, check runs with annotations).
+- Network egress allowlist for the agent job (Anthropic API, npm registry only).
+- Mutation testing (StrykerJS) of the generated tests, with the score in the report.
+- An API key with a spend cap (`--max-budget-usd`) and per-PR cost in the report.
+- An evaluation set of PRs with known expected decisions and seeded bugs, run on every change
+  to the agent or its skills.
+- Diff coverage as a required check, and caching of dependencies and baseline coverage.
