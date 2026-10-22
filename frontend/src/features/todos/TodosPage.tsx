@@ -8,6 +8,7 @@ import { TodoFilters } from './components/TodoFilters'
 import { TodoList } from './components/TodoList'
 import { TodosHeader } from './components/TodosHeader'
 import { useClearCompletedMutation } from './hooks/useClearCompletedMutation'
+import { useDuplicateTodoMutation } from './hooks/useDuplicateTodoMutation'
 import { useTodoFilters } from './hooks/useTodoFilters'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
@@ -20,11 +21,16 @@ export function TodosPage() {
   const filters = useTodoFilters(todos)
   const toggleTodo = useUpdateTodoMutation()
   const clearCompleted = useClearCompletedMutation()
+  const duplicateTodo = useDuplicateTodoMutation()
   const busy = useTodosBusy()
   const { message, notify } = useNotice()
   const [editor, setEditor] = useState<Todo | 'new' | null>(null)
   const [deleting, setDeleting] = useState<Todo | null>(null)
-  const error = toggleTodo.error ?? clearCompleted.error ?? todosQuery.error
+  const error =
+    toggleTodo.error ??
+    clearCompleted.error ??
+    duplicateTodo.error ??
+    todosQuery.error
   const completedCount = todos.filter((todo) => todo.completed).length
 
   async function toggle(todo: Todo) {
@@ -39,6 +45,15 @@ export function TodosPage() {
           ? 'Another task complete. Well done!'
           : 'Task marked as active.',
       )
+    } catch {
+      // Display the mutation error in the page alert.
+    }
+  }
+  async function duplicate(todo: Todo) {
+    if (busy) return
+    try {
+      await duplicateTodo.mutateAsync(todo.id)
+      notify('Task duplicated.')
     } catch {
       // Display the mutation error in the page alert.
     }
@@ -59,6 +74,7 @@ export function TodosPage() {
   async function retry() {
     toggleTodo.reset()
     clearCompleted.reset()
+    duplicateTodo.reset()
     await todosQuery.refetch()
   }
 
@@ -100,6 +116,7 @@ export function TodosPage() {
           onCreate={() => setEditor('new')}
           onToggle={(todo) => void toggle(todo)}
           onEdit={setEditor}
+          onDuplicate={(todo) => void duplicate(todo)}
           onDelete={setDeleting}
         />
       </main>
