@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Started by test-agent.yml after it pushes tests: pushes made with GITHUB_TOKEN do not trigger workflows.
+  workflow_dispatch:
 
 permissions:
   contents: read

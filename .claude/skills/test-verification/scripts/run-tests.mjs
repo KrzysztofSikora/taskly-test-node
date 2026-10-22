@@ -89,7 +89,7 @@ if (action === 'test') {
   const outcomes = runs.map(({ res }) => res.code === 0);
   output = { ok: outcomes.every(Boolean), stable: outcomes.every((o) => o === outcomes[0]), runs: outcomes, failures: runs.flatMap(({ summary }) => summary?.failures ?? []) };
 } else if (action === 'coverage') {
-  const { res, summary } = vitest(['--coverage', '--coverage.reporter=json-summary', '--coverage.reporter=text-summary'], []);
+  const { res, summary } = vitest(['--coverage', '--coverage.reportOnFailure', '--coverage.reporter=json-summary', '--coverage.reporter=text-summary'], []);
   const file = join(cwd, 'coverage/coverage-summary.json');
   let coverage = null;
   if (existsSync(file)) {
