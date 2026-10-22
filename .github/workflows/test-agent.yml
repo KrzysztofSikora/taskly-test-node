@@ -208,6 +208,7 @@ jobs:
     if: always() && needs.verify.result == 'success'
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     timeout-minutes: 5
@@ -243,6 +244,8 @@ jobs:
           # A plain (fast-forward only) push is rejected if the branch moved since the agent ran.
           if git push origin "HEAD:refs/heads/${HEAD_REF}"; then
             sed -i "s/{{COMMIT}}/$(git rev-parse --short HEAD)/" "$comment"
+            # The push does not trigger workflows; start CI for the new head explicitly.
+            gh workflow run ci.yml --ref "$HEAD_REF"
           else
             sed -i "s/^✅ Tests verified and committed to this branch.*$/⚠️ Tests were verified but could not be pushed: the branch moved since the agent ran. Re-run the workflow, or apply the patch from the run artifacts./" "$comment"
           fi

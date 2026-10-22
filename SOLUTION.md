@@ -82,7 +82,7 @@ repository, so the agent is constrained at several independent layers:
 | Agent edits production code, configs, workflows or itself | 1) tool allowlist in the agent (`Read, Write, Edit, Bash, StructuredOutput`); 2) permission allowlist in `scripts/test-agent/claude-settings.json` with `dontAsk` mode; 3) PreToolUse guard (`.claude/hooks/guard.mjs`) that denies writes outside test paths; 4) `check-patch.mjs` in the verify job rejects any non-test path, deleted/renamed tests, `.only`/`.skip`/`.todo`/`it.fails`, and oversized patches. Layer 4 runs from a copy of the tooling taken **before** the patch is applied. |
 | Agent exfiltrates the token (e.g. via prompt injection in PR content) | Shell access is limited to two skill scripts and read-only git: no pipes, chaining, substitution, redirects, `npm`/`npx`/`curl`, network tools or `.env`. Tests run through `run-tests.mjs`, which starts every child process with a scrubbed environment (no `CLAUDE_*`, `GITHUB_*`), so test code never sees the token. The agent job has a read-only `GITHUB_TOKEN` and `persist-credentials: false`, and `run-agent.sh` starts Claude under `env -i` with only the variables it needs. Skills and the agent prompt state that PR content is data, not instructions, and that suspicious instructions are reported. |
 | Agent "passes" by weakening tests | Forbidden by the rules, rejected by `check-patch` (skips, focus, `it.fails`, deletions), and reported as a warning when assertions disappear from an existing test. The verify job runs the **full** suite with the existing coverage thresholds. |
-| Write token misused | Only the `publish` job has `contents: write` / `pull-requests: write`, and it executes no repository code: `git apply`, `git commit`, `git push`, `gh api`. Pushes made with `GITHUB_TOKEN` do not trigger workflows, so there are no loops. |
+| Write token misused | Only the `publish` job has `contents: write` / `pull-requests: write` / `actions: write`, and it executes no repository code: `git apply`, `git commit`, `git push`, `gh api`, `gh workflow run`. Pushes made with `GITHUB_TOKEN` do not trigger workflows, so there are no loops. CI for the bot commit is started explicitly with `workflow_dispatch` (only `ci.yml`, never the agent). |
 | Supply chain | Actions pinned by commit SHA. Claude Code pinned to an exact version. `npm ci --ignore-scripts` everywhere, with `prisma generate` as the only explicit build step. |
 | Runaway cost or hangs | Turn limit (`--max-turns`, PR: 80), CLI timeout (25 min) and job timeout (40 min). `concurrency` cancels a running agent when the PR gets a new push. The `paths` filter skips PRs that do not touch `backend/src` or `frontend/src`. The `skip-test-agent` label opts a PR out. |
 
@@ -214,7 +214,47 @@ review of the bot commit stays part of the process.
 
 ### 2. Pull request with a new feature (the agentic workflow)
 
-_Filled in from the demo PR run._
+[PR #2](../../pull/2) adds "Clear all completed tasks" across both projects. A new
+`DELETE /api/todos/completed` route (registered before `/:id`), `TodoStore.deleteCompleted()`,
+`todosApi.clearCompleted()`, `useClearCompletedMutation` and a "Clear completed (n)" button in
+`TodosHeader`, wired up in `TodosPage`. It deliberately ships **without test changes**, and the
+interface changes break existing tests: a type error in `router.test.ts` (fake repository lacks
+`deleteCompleted`) and in `TodosHeader.test.tsx` (new required props), and 11 failing tests in
+`TodosPage.test.tsx` (the new hook needs a `QueryClient`).
+
+**Agent run** ([workflow run](../../actions/runs/39819922506)): `claude-sonnet-5-5`, 38 turns,
+98 s; one command denied by the guard, then retried within policy.
+
+| File | Decision | What the agent did |
+|------|----------|--------------------|
+| `hooks/useClearCompletedMutation.ts` | create | completed tasks are removed from the cache; an empty cache is left alone; the cache is kept when the request fails |
+| `backend/.../repository.ts` | update | `deleteCompleted` calls `deleteMany({ where: { completed: true } })` and returns the count |
+| `backend/.../router.ts` | update | added `deleteCompleted` to the fake repository; `DELETE /completed` → `200 { deleted }` **and does not reach `repository.delete`**, so the route-order risk is pinned |
+| `api/todos.ts` | update | `clearCompleted` sends `DELETE /todos/completed` |
+| `components/TodosHeader.tsx` | update | existing test given the new props; button hidden at 0, shows the count, calls back, disabled while busy |
+| `TodosPage.tsx` | update | mocked the new hook (fixes the 11 failures); count passed to the header, singular/plural notice, no notice on failure, ignored while busy, error in the alert, retry resets the mutation |
+| `openapi.json`, `types.ts`, `queryKeys.ts` | not_testable | schema document, type declarations, constants |
+
+All six test files passed the 3× shuffled flakiness check. The agent's report
+also noted that it formatted only the frontend files (the backend has no formatter).
+
+**Independent verification** (job *Verify*, no secrets): policy check passed (6 test files,
+220 changed lines). Type check clean in both projects. **Backend 80/80, frontend 102/102.**
+Coverage: backend lines 94.7% → 97.3%; every targeted file at 100% lines, except
+`TodosPage.tsx` at 97%. *Publish* committed the tests as `github-actions[bot]`
+(`test(agent): add unit tests for #2`) and posted the report comment on the PR. I then pulled
+the bot commit and re-ran `verify.mjs` locally with the same result.
+
+**What this run surfaced and how I fixed it:**
+- The first attempt on this PR failed in 0 s. The token secret contained a wrapped line
+  (`Invalid Authorization header value … contains a line break`). The pipeline behaved
+  correctly: nothing was committed and the verification table was shown. But the comment said
+  "success, unknown model" and repeated 11 stack traces. Fixed in #3: whitespace is stripped
+  from tokens, the CLI error is shown, and identical failures are grouped.
+- "Before" coverage for the frontend was `n/a`, because Vitest does not write the summary when
+  tests fail, and on this PR they did. Fixed with `--coverage.reportOnFailure`.
+- The bot commit did not start CI, so `ci` stayed red on the PR's previous head. Fixed by
+  dispatching `ci.yml` after the push.
 
 ## Assumptions
 
@@ -236,9 +276,11 @@ _Filled in from the demo PR run._
   *pass*. They cannot guarantee the tests are *meaningful*. The skills push towards
   behavioural assertions, and the comment lists the behaviours covered for review. Mutation
   testing would measure it (see below).
-- **The agent's commit does not trigger CI.** Pushes made with `GITHUB_TOKEN` do not start
-  workflows. The verify job runs the same checks on exactly that tree, but GitHub shows no
-  `ci` check on the bot commit until the next push.
+- **CI on the bot commit runs through `workflow_dispatch`.** Pushes made with `GITHUB_TOKEN`
+  do not start workflows, so *Publish* dispatches `ci.yml` for the PR branch after pushing.
+  The resulting check belongs to the commit, but it is a `workflow_dispatch` run, not a
+  `pull_request` run. Branch protection that requires `pull_request` checks would need a
+  GitHub App token instead (see below).
 - **Command filtering is pattern-based.** The guard and allowlist match command text. They
   are strong for this narrow command set, but the real boundary is the CI job itself: an
   ephemeral runner with a read-only token, a scrubbed environment for tests, and no push
@@ -252,8 +294,8 @@ _Filled in from the demo PR run._
 
 ## What I would change for production
 
-- **A GitHub App** instead of `GITHUB_TOKEN` for publishing, so the bot commit triggers CI
-  and shows a proper identity. A check run with annotations instead of, or in addition to,
+- **A GitHub App** instead of `GITHUB_TOKEN` for publishing, so the bot commit triggers the
+  regular `pull_request` CI and shows a proper identity. A check run with annotations instead of, or in addition to,
   the comment.
 - **Network egress control** for the agent job (allowlist only the Anthropic API and the npm
   registry), e.g. with a hardened runner, so command filtering is not the main line of
