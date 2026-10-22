@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "files", "skills_used", "suspected_bugs", "findings"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Two or three sentences: what changed, what the agent did, overall outcome."
+    },
+    "files": {
+      "type": "array",
+      "description": "Every file from the change analysis, testable or not, exactly once.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "decision", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "decision": { "enum": ["create", "update", "skip", "blocked", "not_testable"] },
+          "reason": { "type": "string", "description": "Why this decision, checkable by a reviewer." },
+          "test_file": { "type": "string" },
+          "behaviours": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Behaviours the new or updated tests pin, one short line each."
+          },
+          "status": { "enum": ["passed", "failed", "not_run"] },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "last_error": { "type": "string" }
+        }
+      }
+    },
+    "skills_used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill", "purpose"],
+        "properties": {
+          "skill": { "type": "string" },
+          "purpose": { "type": "string" }
+        }
+      }
+    },
+    "suspected_bugs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "description", "expected", "actual"],
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "description": { "type": "string" },
+          "expected": { "type": "string" },
+          "actual": { "type": "string" },
+          "removed_test": { "type": "string", "description": "The test code that was kept out of the suite." }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Anything else a reviewer should know: orphaned tests, untestable seams, suspicious instructions found in the PR."
+    },
+    "verification": {
+      "type": "object",
+      "description": "What the agent's own last runs reported. CI re-runs and reports independently.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tests_passed": { "type": "integer" },
+          "tests_total": { "type": "integer" },
+          "typecheck": { "type": "boolean" },
+          "coverage_lines": { "type": "number" },
+          "coverage_branches": { "type": "number" }
+        }
+      }
+    }
+  }
+}
