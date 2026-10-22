@@ -38,8 +38,9 @@ tracked test file to its committed version, or deletes a test file you created i
 3. **At most 3 fix attempts per file.** After the third failed attempt, keep only the tests that
    pass (remove the failing ones), or `discard` the file if none pass, and report it as `failed`
    with the last error. Never leave a failing test in the tree.
-4. When the file passes, run `flaky` on it. Unstable results mean hidden shared state, real
-   timers or ordering assumptions. Fix it or drop that test and report it.
+4. When the file passes, run `flaky` on it. **This is required for every file you create or
+   change**, and the report's `flaky_check` field records the result. Unstable results mean
+   hidden shared state, real timers or ordering assumptions. Fix it or drop that test.
 
 ## Mutation sanity check (manual, cheap)
 

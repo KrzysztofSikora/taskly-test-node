@@ -52,9 +52,10 @@ if (report?.summary) lines.push(`> ${esc(report.summary)}`, '');
 // Decisions per file.
 if (report?.files?.length) {
   lines.push('### Decisions', '', '| File | Decision | Test file | Status | Reason |', '|------|----------|-----------|--------|--------|');
-  const order = { create: 0, update: 1, blocked: 2, skip: 3, not_testable: 4 };
+  const order = { create: 0, update: 1, blocked: 2, deferred: 3, skip: 4, not_testable: 5 };
   for (const file of [...report.files].sort((a, b) => order[a.decision] - order[b.decision])) {
-    const status = file.status === 'passed' ? '✅' : file.status === 'failed' ? `❌${file.attempts ? ` after ${file.attempts}` : ''}` : '➖';
+    const flaky = file.flaky_check === 'unstable' ? ' (flaky)' : file.flaky_check === 'not_run' && file.status === 'passed' ? ' (stability not checked)' : '';
+    const status = file.status === 'passed' ? `✅${flaky}` : file.status === 'failed' ? `❌${file.attempts ? ` after ${file.attempts}` : ''}` : '➖';
     lines.push(`| \`${esc(file.path)}\` | ${file.decision} | ${file.test_file ? `\`${esc(file.test_file)}\`` : ''} | ${status} | ${esc(file.reason)} |`);
   }
   lines.push('');
