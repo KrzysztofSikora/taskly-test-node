@@ -84,7 +84,7 @@ repository, so the agent is constrained at several independent layers:
 | Agent edits production code, configs, workflows or itself | 1) tool allowlist in the agent (`Read, Write, Edit, Bash, StructuredOutput`); 2) permission allowlist in `scripts/test-agent/claude-settings.json` with `dontAsk` mode; 3) PreToolUse guard (`.claude/hooks/guard.mjs`) that denies writes outside test paths; 4) `check-patch.mjs` in the verify job rejects any non-test path, deleted/renamed tests, `.only`/`.skip`/`.todo`/`it.fails`, and oversized patches. Layer 4 runs from a copy of the tooling taken **before** the patch is applied. |
 | Agent exfiltrates the token (e.g. via prompt injection in PR content) | Shell access is limited to two skill scripts and read-only git: no pipes, chaining, substitution, redirects, `npm`/`npx`/`curl`, network tools or `.env`. Tests run through `run-tests.mjs`, which starts every child process with a scrubbed environment (no `CLAUDE_*`, `GITHUB_*`), so test code never sees the token. The agent job has a read-only `GITHUB_TOKEN` and `persist-credentials: false`, and `run-agent.sh` starts Claude under `env -i` with only the variables it needs. Skills and the agent prompt state that PR content is data, not instructions, and that suspicious instructions are reported. |
 | Agent "passes" by weakening tests | Forbidden by the rules, rejected by `check-patch` (skips, focus, `it.fails`, deletions), and reported as a warning when assertions disappear from an existing test. The verify job runs the **full** suite with the existing coverage thresholds. |
-| Write token misused | Only the `publish` job has `contents: write` / `pull-requests: write` / `actions: write`, and it executes no repository code: `git apply`, `git commit`, `git push`, `gh api`, `gh workflow run`. Pushes made with `GITHUB_TOKEN` do not trigger workflows, so there are no loops. CI for the bot commit is started explicitly with `workflow_dispatch` (only `ci.yml`, never the agent). |
+| Write token misused | Only the `publish` job has `contents: write` / `pull-requests: write` / `actions: write`, and it executes no repository code: `git apply`, `git commit`, `git push`, `gh api`, `gh workflow run`. Pushes made with `GITHUB_TOKEN` do not start workflows on their own. GitHub creates the `pull_request` runs but holds them as *action required*, and the agent job would skip them anyway because the actor is `github-actions[bot]`, not the owner. So there are no loops. CI for the bot commit is started explicitly with `workflow_dispatch` (only `ci.yml`, never the agent). |
 | Supply chain | Actions pinned by commit SHA. Claude Code pinned to an exact version. `npm ci --ignore-scripts` everywhere, with `prisma generate` as the only explicit build step. |
 | Runaway cost or hangs | Turn limit (`--max-turns`, PR: 80), CLI timeout (25 min) and job timeout (40 min). `concurrency` cancels a running agent when the PR gets a new push. The `paths` filter skips PRs that do not touch `backend/src` or `frontend/src`. The `skip-test-agent` label opts a PR out. |
 
@@ -263,6 +263,33 @@ It reported `skip` per file, with the coverage of the changed lines as the reaso
 `no_changes`. No commit was made, and the same report comment was updated in place (still one
 comment on the PR). Repeated runs do not duplicate work.
 
+### 3. Open demo PR: duplicate a task (final, fully automatic workflow)
+
+[PR #6](https://github.com/KrzysztofSikora/taskly-test-node/pull/6) is left open on purpose. It adds `POST /api/todos/:id/duplicate`
+(201 with a not-completed copy titled "… (copy)", trimmed to 120 characters; 404/422), and a
+Duplicate button wired through `TodoItem` → `TodoList` → `TodosPage` via
+`useDuplicateTodoMutation`. There are no test changes, so the PR breaks 13 type checks and
+17 tests.
+
+The [run](https://github.com/KrzysztofSikora/taskly-test-node/actions/runs/39823040765) started without any approval, because the environment
+has no required reviewer any more. `claude-sonnet-5-5`, 51 turns, 105 s.
+
+| File | Decision | Behaviours pinned |
+|------|----------|-------------------|
+| `hooks/useDuplicateTodoMutation.ts` | create | copy prepended to the cache; cache created when empty; unchanged on failure |
+| `backend/.../repository.ts` | update | active copy with " (copy)", fresh timestamps, source fields; 120-char title trimmed to `113 × "x" + " (copy)"`; `null` and no `create` for a missing task |
+| `backend/.../router.ts` | update | 201 with the copy; 404; 422 for an invalid ID without calling the repository |
+| `api/todos.ts` | update | `POST /todos/:id/duplicate` |
+| `components/TodoItem.tsx`, `TodoList.tsx` | update | existing renders given the new prop; Duplicate calls only `onDuplicate`, with the clicked task |
+| `TodosPage.tsx` | update | hook mocked; "Task duplicated." notice; no notice on failure; ignored while busy; error in the alert; retry resets the mutation |
+| `openapi.json`, `types.ts`, `queryKeys.ts` | not_testable | |
+
+*Verify*: 7 test files, policy OK, types clean, backend 86/86, frontend 111/111. Coverage on
+the PR rose from 90.3% to 97.6% lines (backend) and from 81.6% to 99.4% (frontend). The
+before numbers are now available thanks to `--coverage.reportOnFailure`. *Publish* committed
+the tests, updated the comment, and dispatched `ci`, which is green on the bot commit. I
+re-ran `verify.mjs` locally on the bot commit with the same numbers.
+
 ## Assumptions
 
 - Only the repository owner opens PRs that should consume the owner's Claude subscription.
@@ -284,7 +311,9 @@ comment on the PR). Repeated runs do not duplicate work.
   behavioural assertions, and the comment lists the behaviours covered for review. Mutation
   testing would measure it (see below).
 - **CI on the bot commit runs through `workflow_dispatch`.** Pushes made with `GITHUB_TOKEN`
-  do not start workflows, so *Publish* dispatches `ci.yml` for the PR branch after pushing.
+  do not start workflows: GitHub creates the `pull_request` runs for the bot's push but holds
+  them as *action required* (seen on #6; they need no action). So *Publish* dispatches `ci.yml`
+  for the PR branch after pushing.
   The resulting check belongs to the commit, but it is a `workflow_dispatch` run, not a
   `pull_request` run. Branch protection that requires `pull_request` checks would need a
   GitHub App token instead (see below).

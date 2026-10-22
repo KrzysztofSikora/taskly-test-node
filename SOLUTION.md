@@ -84,28 +84,36 @@ The first run stopped after 55 of 150 turns and skipped the flakiness check. The
 now states the turn budget, and `deferred` and `flaky_check` are part of the report. After it,
 every file passed the shuffled runs.
 
-**[PR #2](https://github.com/KrzysztofSikora/taskly-test-node/pull/2)** adds "Clear all
-completed tasks" across both projects, deliberately without test changes. It breaks
-`router.test.ts` and `TodosHeader.test.tsx` (type errors) and 11 tests in `TodosPage.test.tsx`.
-[Agent run](https://github.com/KrzysztofSikora/taskly-test-node/actions/runs/39819922506):
-`claude-sonnet-5-5`, 38 turns, 98 s.
+**[PR #6](https://github.com/KrzysztofSikora/taskly-test-node/pull/6), open demo PR, fully automatic:** "Duplicate a task".
+`POST /api/todos/:id/duplicate` creates a not-completed copy titled "… (copy)" (trimmed to the
+120-character limit). A Duplicate button sits on every task (`TodoItem` → `TodoList` →
+`TodosPage`), backed by `useDuplicateTodoMutation`. The PR deliberately ships without test
+changes. The new required prop and the new `TodoStore` method cause 13 type errors in
+`TodoItem.test.tsx`, `TodoList.test.tsx` and `router.test.ts`, and 17 tests in `TodosPage`
+fail. The workflow started on its own when the PR was opened.
+[Agent run](https://github.com/KrzysztofSikora/taskly-test-node/actions/runs/39823040765): `claude-sonnet-5-5`, 51 turns, 105 s.
 
-- **Decisions:** `create` for the new `useClearCompletedMutation` hook. `update` for
-  `repository`, `router`, `api/todos`, `TodosHeader` and `TodosPage`: it repaired all three
-  broken tests and added the new behaviour, including that `DELETE /completed` never reaches
-  `delete(:id)`, which pins the route order. `not_testable` for `openapi.json`, `types.ts` and
-  `queryKeys.ts`.
-- **Skills used:** all four. Analysis decided per file, the two writing skills supplied the
-  recipes, and verification ran the targeted, flakiness, type, format and coverage runs.
-- **Results:** independent *Verify* found 6 test files, only test paths, clean types,
-  **backend 80/80, frontend 102/102**. Backend lines went from 94.7% to 97.3%, and the targeted
-  files are at 100% (`TodosPage` 97%). *Publish* committed the tests and CI went green.
-- **Second run** on the same PR, after a rebase: every change was already covered, so the
-  decision was `no_changes`. No commit was made, and the same comment was updated.
-- **What the runs surfaced** (fixed in #3 and #4): a token pasted with a line break (now
-  stripped and reported clearly), missing baseline coverage when the PR's tests fail
-  (`--coverage.reportOnFailure`), and no CI on the bot commit (*Publish* now dispatches
-  `ci.yml`).
+- **Decisions:** `create` for `useDuplicateTodoMutation`. `update` for `repository`, `router`,
+  `api/todos`, `TodoItem`, `TodoList` and `TodosPage`: it repaired the broken tests and added
+  the new behaviour, including that a 120-character title becomes `113 × "x" + " (copy)"`,
+  that a completed source gives an active copy, 404/422 on the route, and the page notice,
+  busy guard, error and retry. `not_testable` for `openapi.json`, `types.ts` and
+  `queryKeys.ts`, each with a reason.
+- **Skills used:** all four. `pr-change-analysis` mapped files to tests and mocks, the backend
+  and frontend skills supplied the recipes, and `test-verification` ran targeted runs, the 3×
+  shuffled flakiness check, type check, Prettier and coverage.
+- **Results:** independent *Verify* found 7 test files, only test paths, clean types,
+  **backend 86/86, frontend 111/111**. Coverage on the PR rose from 90.3% to 97.6% lines
+  (backend) and from 81.6% to 99.4% (frontend), and every targeted file is at 100%
+  (`TodosPage` 97.6%). *Publish* committed `test(agent): add unit tests for #6`, posted the
+  report comment, and dispatched `ci`, which is green on the bot commit.
+
+**[PR #2](https://github.com/KrzysztofSikora/taskly-test-node/pull/2)** (merged) is the first demo, "Clear all completed tasks", with the same
+cycle: 1 `create`, 5 `update`, 80/80 and 102/102 tests. A second run after a rebase found
+everything covered and ended with `no_changes`: no commit, and the comment was updated in
+place. The runs on #2 also surfaced three problems, fixed in #3 and #4: a token pasted with a
+line break (now stripped and reported clearly), missing baseline coverage when the PR's tests
+fail (`--coverage.reportOnFailure`), and no CI on the bot commit (now dispatched).
 
 ## Assumptions
 
@@ -122,8 +130,10 @@ completed tasks" across both projects, deliberately without test changes. It bre
 - CI guarantees the tests are safe and pass, not that they are meaningful. The comment lists
   the covered behaviours for review.
 - Command filtering matches text. The real boundary is the ephemeral, read-only CI job.
-- The bot's CI runs as `workflow_dispatch`, not `pull_request`, which matters for branch
-  protection rules.
+- The bot's CI runs as `workflow_dispatch`. GitHub also creates `pull_request` runs for the
+  bot's push but holds them as *action required*. They need no action: the agent job ignores
+  them because the actor is not the owner. Branch protection rules would need a GitHub App
+  token.
 - A Pro token shares the owner's usage limits. Very large PRs may hit the turn budget, and the
   remaining files are then reported as `deferred`.
 - Test mapping relies on relative imports and naming conventions. Path aliases would need
