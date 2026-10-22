@@ -31,3 +31,103 @@ it('shows an active task and forwards edit requests', async () => {
   expect(onToggle).not.toHaveBeenCalled()
   expect(onDelete).not.toHaveBeenCalled()
 })
+
+it('forwards toggle and delete requests', async () => {
+  const user = userEvent.setup()
+  const onToggle = vi.fn()
+  const onDelete = vi.fn()
+  render(
+    <TodoItem
+      todo={todoFixture}
+      busy={false}
+      onEdit={vi.fn()}
+      onToggle={onToggle}
+      onDelete={onDelete}
+    />,
+  )
+  await user.click(
+    screen.getByRole('checkbox', { name: `Complete: ${todoFixture.title}` }),
+  )
+  expect(onToggle).toHaveBeenCalledTimes(1)
+  await user.click(
+    screen.getByRole('button', { name: `Delete: ${todoFixture.title}` }),
+  )
+  expect(onDelete).toHaveBeenCalledTimes(1)
+})
+
+it('shows a completed task with its description and an offer to reactivate it', () => {
+  render(
+    <TodoItem
+      todo={{
+        ...todoFixture,
+        completed: true,
+        description: 'Slides and notes',
+        priority: 'high',
+      }}
+      busy={false}
+      onEdit={vi.fn()}
+      onToggle={vi.fn()}
+      onDelete={vi.fn()}
+    />,
+  )
+  expect(screen.getByText('Completed')).toBeVisible()
+  expect(screen.getByText('High')).toBeVisible()
+  expect(screen.getByText('Slides and notes')).toBeVisible()
+  expect(
+    screen.getByRole('checkbox', {
+      name: `Mark as active: ${todoFixture.title}`,
+    }),
+  ).toBeChecked()
+})
+
+it('marks an active task with a past due date as overdue', () => {
+  render(
+    <TodoItem
+      todo={{ ...todoFixture, due_date: '2000-01-15' }}
+      busy={false}
+      onEdit={vi.fn()}
+      onToggle={vi.fn()}
+      onDelete={vi.fn()}
+    />,
+  )
+  expect(screen.getByText(/15 Jan 2000/)).toHaveTextContent('· overdue')
+})
+
+it('does not mark a completed task or a future due date as overdue', () => {
+  const { rerender } = render(
+    <TodoItem
+      todo={{ ...todoFixture, completed: true, due_date: '2000-01-15' }}
+      busy={false}
+      onEdit={vi.fn()}
+      onToggle={vi.fn()}
+      onDelete={vi.fn()}
+    />,
+  )
+  expect(screen.getByText(/15 Jan 2000/)).not.toHaveTextContent('overdue')
+  rerender(
+    <TodoItem
+      todo={{ ...todoFixture, due_date: '2999-03-04' }}
+      busy={false}
+      onEdit={vi.fn()}
+      onToggle={vi.fn()}
+      onDelete={vi.fn()}
+    />,
+  )
+  expect(screen.getByText(/4 Mar 2999/)).not.toHaveTextContent('overdue')
+})
+
+it('disables every action while busy', () => {
+  render(
+    <TodoItem
+      todo={todoFixture}
+      busy
+      onEdit={vi.fn()}
+      onToggle={vi.fn()}
+      onDelete={vi.fn()}
+    />,
+  )
+  expect(screen.getByRole('checkbox')).toBeDisabled()
+  screen
+    .getAllByRole('button')
+    .forEach((button) => expect(button).toBeDisabled())
+})

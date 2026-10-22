@@ -2,6 +2,8 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import { useNotice } from '../../hooks/useNotice'
+import { todoFixture } from '../../test/todoFixture'
+import type { Todo } from './types'
 import { useTodoFilters } from './hooks/useTodoFilters'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
@@ -17,15 +19,235 @@ vi.mock('./hooks/useUpdateTodoMutation', () => ({
   useUpdateTodoMutation: vi.fn(),
 }))
 vi.mock('./components/TodosHeader', () => ({
-  TodosHeader: () => <h1>Tasks</h1>,
+  TodosHeader: ({
+    disabled,
+    onCreate,
+  }: {
+    disabled: boolean
+    onCreate: () => void
+  }) => (
+    <>
+      <h1>Tasks</h1>
+      <button disabled={disabled} onClick={onCreate}>
+        Header create
+      </button>
+    </>
+  ),
 }))
 vi.mock('./components/TodoFilters', () => ({ TodoFilters: () => null }))
-vi.mock('./components/TodoList', () => ({ TodoList: () => <p>Task list</p> }))
-vi.mock('./components/TodoEditor', () => ({ TodoEditor: () => null }))
-vi.mock('./components/DeleteTodoDialog', () => ({
-  DeleteTodoDialog: () => null,
+vi.mock('./components/TodoList', () => ({
+  TodoList: ({
+    todos,
+    onToggle,
+    onEdit,
+    onDelete,
+  }: {
+    todos: Todo[]
+    onToggle: (todo: Todo) => void
+    onEdit: (todo: Todo) => void
+    onDelete: (todo: Todo) => void
+  }) => (
+    <>
+      <p>Task list</p>
+      {todos.map((todo) => (
+        <div key={todo.id}>
+          <button onClick={() => onToggle(todo)}>Toggle {todo.id}</button>
+          <button onClick={() => onEdit(todo)}>Edit {todo.id}</button>
+          <button onClick={() => onDelete(todo)}>Delete {todo.id}</button>
+        </div>
+      ))}
+    </>
+  ),
 }))
-vi.mock('../../components/SuccessNotice', () => ({ SuccessNotice: () => null }))
+vi.mock('./components/TodoEditor', () => ({
+  TodoEditor: ({
+    todo,
+    onClose,
+    onSaved,
+  }: {
+    todo: Todo | 'new'
+    onClose: () => void
+    onSaved: (notice: string) => void
+  }) => (
+    <div role="dialog" aria-label="Editor">
+      <p>{todo === 'new' ? 'creating' : `editing ${todo.id}`}</p>
+      <button onClick={onClose}>Close editor</button>
+      <button onClick={() => onSaved('Saved!')}>Save editor</button>
+    </div>
+  ),
+}))
+vi.mock('./components/DeleteTodoDialog', () => ({
+  DeleteTodoDialog: ({
+    todo,
+    onClose,
+    onDeleted,
+  }: {
+    todo: Todo
+    onClose: () => void
+    onDeleted: () => void
+  }) => (
+    <div role="dialog" aria-label="Deleting">
+      <p>deleting {todo.id}</p>
+      <button onClick={onClose}>Close delete</button>
+      <button onClick={onDeleted}>Confirm delete</button>
+    </div>
+  ),
+}))
+vi.mock('../../components/SuccessNotice', () => ({
+  SuccessNotice: ({ message }: { message: string }) => (
+    <p data-testid="notice">{message}</p>
+  ),
+}))
+
+function setup({
+  todos = [todoFixture],
+  busy = false,
+  isPending = false,
+  queryError = null,
+  mutationError = null,
+  mutateAsync = vi.fn(),
+}: {
+  todos?: Todo[]
+  busy?: boolean
+  isPending?: boolean
+  queryError?: Error | null
+  mutationError?: Error | null
+  mutateAsync?: ReturnType<typeof vi.fn>
+} = {}) {
+  const notify = vi.fn()
+  const refetch = vi.fn().mockResolvedValue(undefined)
+  vi.mocked(useTodosQuery).mockReturnValue({
+    data: todos,
+    isPending,
+    isFetching: false,
+    isError: !!queryError,
+    error: queryError,
+    refetch,
+  } as unknown as ReturnType<typeof useTodosQuery>)
+  vi.mocked(useUpdateTodoMutation).mockReturnValue({
+    error: mutationError,
+    reset: vi.fn(),
+    mutateAsync,
+  } as unknown as ReturnType<typeof useUpdateTodoMutation>)
+  vi.mocked(useTodosBusy).mockReturnValue(busy)
+  vi.mocked(useNotice).mockReturnValue({ message: 'Hello notice', notify })
+  vi.mocked(useTodoFilters).mockReturnValue({
+    filter: 'all',
+    search: '',
+    sort: 'newest',
+    visible: todos,
+    setFilter: vi.fn(),
+    setSearch: vi.fn(),
+    setSort: vi.fn(),
+  })
+  return { notify, refetch, mutateAsync }
+}
+
+it.each([
+  [false, 'Another task complete. Well done!'],
+  [true, 'Task marked as active.'],
+])(
+  'toggles a task and announces the result (saved completed: %s)',
+  async (completed, notice) => {
+    const user = userEvent.setup()
+    const mutateAsync = vi
+      .fn()
+      .mockResolvedValue({ ...todoFixture, completed: !completed })
+    const { notify } = setup({
+      todos: [{ ...todoFixture, completed }],
+      mutateAsync,
+    })
+    render(<TodosPage />)
+    await user.click(screen.getByRole('button', { name: 'Toggle 7' }))
+    expect(mutateAsync).toHaveBeenCalledWith({
+      id: 7,
+      input: { completed: !completed },
+    })
+    expect(notify).toHaveBeenCalledWith(notice)
+  },
+)
+
+it('does not announce anything when toggling fails', async () => {
+  const user = userEvent.setup()
+  const mutateAsync = vi.fn().mockRejectedValue(new Error('nope'))
+  const { notify } = setup({ mutateAsync })
+  render(<TodosPage />)
+  await user.click(screen.getByRole('button', { name: 'Toggle 7' }))
+  expect(mutateAsync).toHaveBeenCalledTimes(1)
+  expect(notify).not.toHaveBeenCalled()
+})
+
+it('ignores toggles while the page is busy and disables creation', async () => {
+  const user = userEvent.setup()
+  const { mutateAsync } = setup({ busy: true })
+  render(<TodosPage />)
+  expect(screen.getByRole('button', { name: 'Header create' })).toBeDisabled()
+  await user.click(screen.getByRole('button', { name: 'Toggle 7' }))
+  expect(mutateAsync).not.toHaveBeenCalled()
+})
+
+it('disables creation while the tasks load', () => {
+  setup({ isPending: true })
+  render(<TodosPage />)
+  expect(screen.getByRole('button', { name: 'Header create' })).toBeDisabled()
+})
+
+it('shows no alert when there is no error and prefers the mutation error', () => {
+  setup()
+  const { unmount } = render(<TodosPage />)
+  expect(screen.queryByTestId('alert')).not.toBeInTheDocument()
+  unmount()
+  setup({
+    mutationError: new Error('Update failed'),
+    queryError: new Error('Query failed'),
+  })
+  render(<TodosPage />)
+  expect(screen.getByTestId('alert')).toHaveTextContent('Update failed')
+})
+
+it('opens and closes the editor for a new task and shows the saved notice', async () => {
+  const user = userEvent.setup()
+  const { notify } = setup()
+  render(<TodosPage />)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Header create' }))
+  expect(screen.getByText('creating')).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Close editor' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Header create' }))
+  await user.click(screen.getByRole('button', { name: 'Save editor' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(notify).toHaveBeenCalledWith('Saved!')
+})
+
+it('opens the editor for an existing task', async () => {
+  const user = userEvent.setup()
+  setup()
+  render(<TodosPage />)
+  await user.click(screen.getByRole('button', { name: 'Edit 7' }))
+  expect(screen.getByText('editing 7')).toBeVisible()
+})
+
+it('confirms deletion, announces it and closes the dialog', async () => {
+  const user = userEvent.setup()
+  const { notify } = setup()
+  render(<TodosPage />)
+  await user.click(screen.getByRole('button', { name: 'Delete 7' }))
+  expect(screen.getByText('deleting 7')).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Close delete' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(notify).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'Delete 7' }))
+  await user.click(screen.getByRole('button', { name: 'Confirm delete' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(notify).toHaveBeenCalledWith('Task deleted.')
+})
+
+it('renders the current notice message', () => {
+  setup()
+  render(<TodosPage />)
+  expect(screen.getByTestId('notice')).toHaveTextContent('Hello notice')
+})
 
 it('displays a query failure and resets mutation errors before retrying', async () => {
   const user = userEvent.setup()
