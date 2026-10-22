@@ -59,3 +59,21 @@ test('escapes table-breaking characters from agent text', () => {
   });
   assert.match(md, /x \\\| y z/);
 });
+
+test('shows the agent error, type errors, and groups identical test failures', () => {
+  const failure = (test) => ({ file: 'frontend/src/a.test.tsx', test, message: 'Error: No QueryClient set\n    at x\n    at y\n    at z\n    at w' });
+  const md = render({
+    'meta.json': { outcome: 'api_error', error: 'Invalid auth token', turns: 1 },
+    'verify.json': {
+      ok: false,
+      backend: { typecheck: { ok: false, errors: ['tests/router.test.ts(11,43): error TS2345: missing deleteCompleted'] }, tests: { total: 1, passed: 1, failed: 0 }, failures: [] },
+      frontend: { typecheck: { ok: true, errors: [] }, tests: { total: 5, passed: 0, failed: 5 }, failures: ['a', 'b', 'c', 'd', 'e'].map(failure) },
+    },
+    'context.json': { outcome: 'agent_failed' },
+  });
+  assert.match(md, /did not finish with a report: Invalid auth token/);
+  assert.match(md, /backend\/tests\/router\.test\.ts\(11,43\): error TS2345/);
+  assert.match(md, /`frontend\/src\/a\.test\.tsx`: 5 tests \(a; b; c; …\)/);
+  assert.equal(md.match(/No QueryClient set/g).length, 1);
+  assert.doesNotMatch(md, /at w/);
+});

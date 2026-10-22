@@ -57,7 +57,10 @@ transcript="$out/transcript.jsonl"
 # GITHUB_TOKEN and other CI secrets are deliberately not passed through.
 env_args=(PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" CI="${CI:-}" TEST_AGENT_RUN=1)
 for var in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY XDG_CONFIG_HOME; do
-  [[ -n "${!var:-}" ]] && env_args+=("$var=${!var}")
+  value="${!var:-}"
+  # Tokens never contain whitespace; a pasted secret often carries a wrapped line or trailing newline.
+  [[ "$var" != XDG_CONFIG_HOME ]] && value="${value//[$'\t\r\n ']/}"
+  [[ -n "$value" ]] && env_args+=("$var=$value")
 done
 
 task="${task}

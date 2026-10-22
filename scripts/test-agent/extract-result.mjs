@@ -23,12 +23,14 @@ for (const denial of result?.permission_denials ?? []) denials.push({ tool: deni
 const meta = {
   exit_status: Number(status),
   timed_out: Number(status) === 124 || Number(status) === 137,
-  outcome: result?.subtype ?? 'no_result',
+  outcome: result?.is_error ? (result.terminal_reason ?? 'error') : (result?.subtype ?? 'no_result'),
   is_error: result?.is_error ?? true,
+  // On failure the result text is the CLI's error message (auth, limits, API errors).
+  error: result?.is_error ? String(result.result ?? '').slice(0, 500) : undefined,
   turns: result?.num_turns ?? null,
   duration_s: result ? Math.round(result.duration_ms / 1000) : null,
   cost_usd: result?.total_cost_usd ?? null,
-  model: Object.keys(result?.modelUsage ?? {})[0] ?? null,
+  model: Object.keys(result?.modelUsage ?? {})[0] ?? lines.find((event) => event.type === 'system' && event.subtype === 'init')?.model ?? null,
   tool_calls: tools,
   permission_denials: denials,
 };
