@@ -45,8 +45,10 @@ test('renders decisions, verification and coverage deltas', () => {
   assert.match(md, /throws on a missing variable/);
 });
 
-test('says so when the agent produced no report', () => {
-  const md = render({ 'context.json': { outcome: 'agent_failed' } });
+test('distinguishes an agent that did not start from one that produced no report', () => {
+  assert.match(render({ 'context.json': { outcome: 'agent_failed' } }), /did not run/);
+  rmSync(dir, { recursive: true, force: true });
+  const md = render({ 'context.json': { outcome: 'agent_failed' }, 'meta.json': { outcome: 'error_max_turns' } });
   assert.match(md, /did not finish with a report/);
   assert.doesNotMatch(md, /### Decisions/);
 });
