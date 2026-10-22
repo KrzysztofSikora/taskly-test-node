@@ -45,7 +45,7 @@ const headline = {
   rejected: '❌ The agent\'s patch was **not** committed: it failed the policy check or verification. The patch is attached to the workflow run for inspection.',
   push_failed: '⚠️ Tests were verified but could not be pushed (the branch moved). Re-run the workflow, or apply the patch from the run artifacts.',
   agent_failed: meta
-    ? '❌ The agent did not finish with a report. See the transcript in the run artifacts.'
+    ? `❌ The agent did not finish with a report${meta.error ? `: ${esc(meta.error)}` : '. See the transcript in the run artifacts.'}`
     : '❌ The agent did not run (for example, missing credentials). See the *Agent* job log.',
 }[outcome];
 if (headline) lines.push(headline, '');
@@ -104,9 +104,22 @@ if (verify || check) {
     if (verify.frontend?.format) lines.push('', `${icon(verify.frontend.format.ok)} Prettier \`format:check\` (frontend)`);
     const failures = ['backend', 'frontend'].flatMap((p) => (verify[p]?.failures ?? []).map((f) => ({ ...f, project: p })));
     const thresholds = ['backend', 'frontend'].flatMap((p) => verify[p]?.threshold_errors ?? []);
-    if (failures.length || thresholds.length) {
+    const typeErrors = ['backend', 'frontend'].flatMap((p) => (verify[p]?.typecheck?.errors ?? []).map((e) => `${p}/${e}`));
+    if (failures.length || thresholds.length || typeErrors.length) {
       lines.push('', '<details><summary>Failures</summary>', '');
-      for (const f of failures) lines.push(`- \`${esc(f.file)}\` ${esc(f.test)}`, '', '  ```', ...String(f.message).split('\n').slice(0, 12).map((l) => `  ${l}`), '  ```');
+      if (typeErrors.length) lines.push('Type errors:', '', '```', ...typeErrors.slice(0, 10).map((e) => e.slice(0, 300)), ...(typeErrors.length > 10 ? [`… ${typeErrors.length - 10} more`] : []), '```', '');
+      // Group by first message line: one broken mock often fails a whole file the same way.
+      const groups = new Map();
+      for (const f of failures) {
+        const key = `${f.file}\n${String(f.message).split('\n')[0]}`;
+        groups.set(key, [...(groups.get(key) ?? []), f]);
+      }
+      for (const group of [...groups.values()].slice(0, 10)) {
+        const [first] = group;
+        const names = group.map((f) => esc(f.test));
+        lines.push(`- \`${esc(first.file)}\`: ${group.length > 1 ? `${group.length} tests (${names.slice(0, 3).join('; ')}${group.length > 3 ? '; …' : ''})` : names[0]}`, '', '  ```', ...String(first.message).split('\n').slice(0, 4).map((l) => `  ${l}`), '  ```');
+      }
+      if (groups.size > 10) lines.push(`- … ${groups.size - 10} more distinct failure(s) in the job log`);
       for (const t of thresholds) lines.push(`- ${esc(t)}`);
       lines.push('</details>');
     }
