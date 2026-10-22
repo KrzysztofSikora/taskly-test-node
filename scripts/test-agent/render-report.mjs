@@ -44,7 +44,9 @@ const headline = {
   no_changes: '➖ The agent decided no test changes are needed.',
   rejected: '❌ The agent\'s patch was **not** committed: it failed the policy check or verification. The patch is attached to the workflow run for inspection.',
   push_failed: '⚠️ Tests were verified but could not be pushed (the branch moved). Re-run the workflow, or apply the patch from the run artifacts.',
-  agent_failed: '❌ The agent did not finish with a report. See the transcript in the run artifacts.',
+  agent_failed: meta
+    ? '❌ The agent did not finish with a report. See the transcript in the run artifacts.'
+    : '❌ The agent did not run (for example, missing credentials). See the *Agent* job log.',
 }[outcome];
 if (headline) lines.push(headline, '');
 if (report?.summary) lines.push(`> ${esc(report.summary)}`, '');

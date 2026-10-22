@@ -125,7 +125,9 @@ Open a PR (not a draft) from a branch of this repository that changes `backend/s
    passed) and creates or updates the **Test agent report** comment.
 
 Every new push to the PR re-runs the cycle and updates the same comment. To opt a PR out, add
-the label `skip-test-agent`.
+the label `skip-test-agent`. It applies to events after the label is set: a label added by
+`gh pr create --label` arrives just after the `opened` event, so for the first run just reject
+the environment approval.
 
 ### Locally
 
