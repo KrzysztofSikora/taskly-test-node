@@ -13,6 +13,21 @@ it('passes the abort signal when fetching tasks', async () => {
   expect(request).toHaveBeenCalledWith('/todos', { signal })
 })
 
+it('patches a task with the given fields only', async () => {
+  vi.mocked(request).mockResolvedValue(todoFixture)
+  await todosApi.update(5, { completed: true })
+  expect(request).toHaveBeenCalledWith('/todos/5', {
+    method: 'PATCH',
+    body: JSON.stringify({ completed: true }),
+  })
+})
+
+it('deletes a task by id', async () => {
+  vi.mocked(request).mockResolvedValue(undefined)
+  await todosApi.remove(5)
+  expect(request).toHaveBeenCalledWith('/todos/5', { method: 'DELETE' })
+})
+
 it('sends only writable task fields on creation', async () => {
   vi.mocked(request).mockResolvedValue(todoFixture)
   await expect(todosApi.create(todoFixture)).resolves.toEqual(todoFixture)
