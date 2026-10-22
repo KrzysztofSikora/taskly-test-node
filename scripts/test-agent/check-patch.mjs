@@ -50,7 +50,7 @@ for (const { path, status } of changes) {
     for (const [rule, message] of FORBIDDEN) if (rule.test(line)) errors.push(`${path}: ${message}: \`${line.trim()}\``);
     for (const [rule, message] of WARN) if (rule.test(line)) warnings.push(`${path}: ${message}`);
   }
-  const count = (lines) => lines.filter((line) => /\bexpect\s*\(/.test(line)).length;
+  const count = (lines) => lines.reduce((sum, line) => sum + (line.match(/\bexpect\s*\(/g)?.length ?? 0), 0);
   if (status === 'M' && count(removed) > count(added)) {
     warnings.push(`${path}: ${count(removed) - count(added)} assertion(s) removed from an existing test; check the update is intended`);
   }
