@@ -28,6 +28,14 @@ it('deletes a task by id', async () => {
   expect(request).toHaveBeenCalledWith('/todos/5', { method: 'DELETE' })
 })
 
+it('duplicates a task by id and returns the copy', async () => {
+  vi.mocked(request).mockResolvedValue(todoFixture)
+  await expect(todosApi.duplicate(5)).resolves.toEqual(todoFixture)
+  expect(request).toHaveBeenCalledWith('/todos/5/duplicate', {
+    method: 'POST',
+  })
+})
+
 it('clears completed tasks and returns the deleted count', async () => {
   vi.mocked(request).mockResolvedValue({ deleted: 2 })
   await expect(todosApi.clearCompleted()).resolves.toEqual({ deleted: 2 })

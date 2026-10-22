@@ -17,6 +17,7 @@ it('shows an active task and forwards edit requests', async () => {
       busy={false}
       onEdit={onEdit}
       onToggle={onToggle}
+      onDuplicate={vi.fn()}
       onDelete={onDelete}
     />,
   )
@@ -42,6 +43,7 @@ it('forwards toggle and delete requests', async () => {
       busy={false}
       onEdit={vi.fn()}
       onToggle={onToggle}
+      onDuplicate={vi.fn()}
       onDelete={onDelete}
     />,
   )
@@ -53,6 +55,29 @@ it('forwards toggle and delete requests', async () => {
     screen.getByRole('button', { name: `Delete: ${todoFixture.title}` }),
   )
   expect(onDelete).toHaveBeenCalledTimes(1)
+})
+
+it('forwards duplicate requests', async () => {
+  const user = userEvent.setup()
+  const onDuplicate = vi.fn()
+  const onEdit = vi.fn()
+  const onDelete = vi.fn()
+  render(
+    <TodoItem
+      todo={todoFixture}
+      busy={false}
+      onEdit={onEdit}
+      onToggle={vi.fn()}
+      onDuplicate={onDuplicate}
+      onDelete={onDelete}
+    />,
+  )
+  await user.click(
+    screen.getByRole('button', { name: `Duplicate: ${todoFixture.title}` }),
+  )
+  expect(onDuplicate).toHaveBeenCalledTimes(1)
+  expect(onEdit).not.toHaveBeenCalled()
+  expect(onDelete).not.toHaveBeenCalled()
 })
 
 it('shows a completed task with its description and an offer to reactivate it', () => {
@@ -67,6 +92,7 @@ it('shows a completed task with its description and an offer to reactivate it', 
       busy={false}
       onEdit={vi.fn()}
       onToggle={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
@@ -87,6 +113,7 @@ it('marks an active task with a past due date as overdue', () => {
       busy={false}
       onEdit={vi.fn()}
       onToggle={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
@@ -100,6 +127,7 @@ it('does not mark a completed task or a future due date as overdue', () => {
       busy={false}
       onEdit={vi.fn()}
       onToggle={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
@@ -110,6 +138,7 @@ it('does not mark a completed task or a future due date as overdue', () => {
       busy={false}
       onEdit={vi.fn()}
       onToggle={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
@@ -123,6 +152,7 @@ it('disables every action while busy', () => {
       busy
       onEdit={vi.fn()}
       onToggle={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
