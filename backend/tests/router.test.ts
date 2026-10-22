@@ -5,7 +5,7 @@ import { createTodosRouter } from '../src/features/todos/router.ts';
 import { todo } from './fixture.ts';
 
 function setup() {
-  const repository = { list: vi.fn().mockResolvedValue([todo]), create: vi.fn().mockResolvedValue(todo), get: vi.fn(), update: vi.fn(), delete: vi.fn() };
+  const repository = { list: vi.fn().mockResolvedValue([todo]), create: vi.fn().mockResolvedValue(todo), get: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteCompleted: vi.fn() };
   const app = express();
   app.use(express.json());
   app.use('/api/todos', createTodosRouter(repository));
@@ -73,6 +73,15 @@ it('deletes a task and responds with 204', async () => {
   const response = await request(app).delete('/api/todos/1');
   expect(response.status).toBe(204);
   expect(repository.delete).toHaveBeenCalledWith(1);
+});
+it('clears completed tasks and reports the deleted count', async () => {
+  const { app, repository } = setup();
+  repository.deleteCompleted.mockResolvedValue(2);
+  const response = await request(app).delete('/api/todos/completed');
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual({ deleted: 2 });
+  expect(repository.deleteCompleted).toHaveBeenCalledOnce();
+  expect(repository.delete).not.toHaveBeenCalled();
 });
 it.each([{ title: '  ' },{ title: 'x'.repeat(121) }, { title: 'Task', priority: 'urgent' }, { title: 'Task', due_date: '2026-02-30' }])(
   'rejects invalid create input without calling the repository: %j', async (payload) => {
