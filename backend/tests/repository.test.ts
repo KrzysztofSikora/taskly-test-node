@@ -76,6 +76,39 @@ it('deletes tasks and handles missing tasks', async () => {
   expect(await repository.delete(1)).toBe(false);
 });
 
+it('duplicates a task as a new active copy with fresh timestamps', async () => {
+  const { database, repository } = setup();
+  const findUnique = vi.spyOn(database.todo, 'findUnique').mockResolvedValue({ ...record, completed: true });
+  const create = vi.spyOn(database.todo, 'create').mockResolvedValue({ ...record, id: 2, title: 'Plan the sprint (copy)' });
+  expect(await repository.duplicate(1)).toEqual({ ...todo, id: 2, title: 'Plan the sprint (copy)' });
+  expect(findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
+  const data = create.mock.calls[0][0].data;
+  expect(data).toMatchObject({
+    title: 'Plan the sprint (copy)', description: record.description, priority: record.priority,
+    due_date: record.due_date, completed: false,
+  });
+  expect(data.created_at).toBeInstanceOf(Date);
+  expect(data.updated_at).toEqual(data.created_at);
+});
+
+it('truncates long titles so the copy fits the 120-character limit', async () => {
+  const { database, repository } = setup();
+  vi.spyOn(database.todo, 'findUnique').mockResolvedValue({ ...record, title: 'x'.repeat(120) });
+  const create = vi.spyOn(database.todo, 'create').mockResolvedValue(record);
+  await repository.duplicate(1);
+  const title = create.mock.calls[0][0].data.title;
+  expect(title).toHaveLength(120);
+  expect(title).toBe(`${'x'.repeat(113)} (copy)`);
+});
+
+it('returns null without creating when duplicating a missing task', async () => {
+  const { database, repository } = setup();
+  vi.spyOn(database.todo, 'findUnique').mockResolvedValue(null);
+  const create = vi.spyOn(database.todo, 'create');
+  expect(await repository.duplicate(99)).toBeNull();
+  expect(create).not.toHaveBeenCalled();
+});
+
 it('deletes only completed tasks and returns how many were removed', async () => {
   const { database, repository } = setup();
   const remove = vi.spyOn(database.todo, 'deleteMany').mockResolvedValue({ count: 3 });

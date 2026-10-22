@@ -12,16 +12,19 @@ vi.mock('./TodoItem', () => ({
   TodoItem: ({
     onToggle,
     onEdit,
+    onDuplicate,
     onDelete,
   }: {
     onToggle: () => void
     onEdit: () => void
+    onDuplicate: () => void
     onDelete: () => void
   }) => (
     <li>
       <span>Task</span>
       <button onClick={onToggle}>Toggle</button>
       <button onClick={onEdit}>Edit</button>
+      <button onClick={onDuplicate}>Duplicate</button>
       <button onClick={onDelete}>Delete</button>
     </li>
   ),
@@ -36,6 +39,7 @@ it('shows loading feedback before showing an empty list', () => {
     onCreate: vi.fn(),
     onToggle: vi.fn(),
     onEdit: vi.fn(),
+    onDuplicate: vi.fn(),
     onDelete: vi.fn(),
   }
   const { rerender } = render(<TodoList {...props} loading />)
@@ -57,6 +61,7 @@ it('shows an unavailable message when loading failed and nothing is cached', () 
       onCreate={vi.fn()}
       onToggle={vi.fn()}
       onEdit={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
@@ -79,6 +84,7 @@ it('keeps showing tasks when a refetch failed but data exists', () => {
       onCreate={vi.fn()}
       onToggle={vi.fn()}
       onEdit={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )
@@ -93,6 +99,7 @@ it('binds item actions to their task', async () => {
   const second = { ...todoFixture, id: todoFixture.id + 1 }
   const onToggle = vi.fn()
   const onEdit = vi.fn()
+  const onDuplicate = vi.fn()
   const onDelete = vi.fn()
   render(
     <TodoList
@@ -104,14 +111,17 @@ it('binds item actions to their task', async () => {
       onCreate={vi.fn()}
       onToggle={onToggle}
       onEdit={onEdit}
+      onDuplicate={onDuplicate}
       onDelete={onDelete}
     />,
   )
   await user.click(screen.getAllByRole('button', { name: 'Toggle' })[1])
   await user.click(screen.getAllByRole('button', { name: 'Edit' })[0])
+  await user.click(screen.getAllByRole('button', { name: 'Duplicate' })[1])
   await user.click(screen.getAllByRole('button', { name: 'Delete' })[1])
   expect(onToggle).toHaveBeenCalledExactlyOnceWith(second)
   expect(onEdit).toHaveBeenCalledExactlyOnceWith(todoFixture)
+  expect(onDuplicate).toHaveBeenCalledExactlyOnceWith(second)
   expect(onDelete).toHaveBeenCalledExactlyOnceWith(second)
 })
 
@@ -126,6 +136,7 @@ it('renders one item per task', () => {
       onCreate={vi.fn()}
       onToggle={vi.fn()}
       onEdit={vi.fn()}
+      onDuplicate={vi.fn()}
       onDelete={vi.fn()}
     />,
   )

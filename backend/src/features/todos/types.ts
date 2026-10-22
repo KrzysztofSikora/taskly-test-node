@@ -14,4 +14,5 @@ export interface TodoStore {
   update(id: number, payload: TodoUpdate): Promise<Todo | null>;
   delete(id: number): Promise<boolean>;
   deleteCompleted(): Promise<number>;
+  duplicate(id: number): Promise<Todo | null>;
 }
