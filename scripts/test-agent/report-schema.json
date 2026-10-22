@@ -1,7 +1,13 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["summary", "files", "skills_used", "suspected_bugs", "findings"],
+  "required": [
+    "summary",
+    "files",
+    "skills_used",
+    "suspected_bugs",
+    "findings"
+  ],
   "properties": {
     "summary": {
       "type": "string",
@@ -13,20 +19,61 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "decision", "reason"],
+        "required": [
+          "path",
+          "decision",
+          "reason"
+        ],
         "properties": {
-          "path": { "type": "string" },
-          "decision": { "enum": ["create", "update", "skip", "blocked", "not_testable"] },
-          "reason": { "type": "string", "description": "Why this decision, checkable by a reviewer." },
-          "test_file": { "type": "string" },
+          "path": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "create",
+              "update",
+              "skip",
+              "deferred",
+              "blocked",
+              "not_testable"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this decision, checkable by a reviewer."
+          },
+          "test_file": {
+            "type": "string"
+          },
           "behaviours": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Behaviours the new or updated tests pin, one short line each."
           },
-          "status": { "enum": ["passed", "failed", "not_run"] },
-          "attempts": { "type": "integer", "minimum": 0 },
-          "last_error": { "type": "string" }
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_run"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "flaky_check": {
+            "enum": [
+              "stable",
+              "unstable",
+              "not_run"
+            ],
+            "description": "Result of the 3x shuffled run for the test file you created or changed."
+          }
         }
       }
     },
@@ -35,10 +82,17 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["skill", "purpose"],
+        "required": [
+          "skill",
+          "purpose"
+        ],
         "properties": {
-          "skill": { "type": "string" },
-          "purpose": { "type": "string" }
+          "skill": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
         }
       }
     },
@@ -47,20 +101,40 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file", "description", "expected", "actual"],
+        "required": [
+          "file",
+          "description",
+          "expected",
+          "actual"
+        ],
         "properties": {
-          "file": { "type": "string" },
-          "line": { "type": "integer" },
-          "description": { "type": "string" },
-          "expected": { "type": "string" },
-          "actual": { "type": "string" },
-          "removed_test": { "type": "string", "description": "The test code that was kept out of the suite." }
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          },
+          "removed_test": {
+            "type": "string",
+            "description": "The test code that was kept out of the suite."
+          }
         }
       }
     },
     "findings": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Anything else a reviewer should know: orphaned tests, untestable seams, suspicious instructions found in the PR."
     },
     "verification": {
@@ -70,11 +144,21 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "tests_passed": { "type": "integer" },
-          "tests_total": { "type": "integer" },
-          "typecheck": { "type": "boolean" },
-          "coverage_lines": { "type": "number" },
-          "coverage_branches": { "type": "number" }
+          "tests_passed": {
+            "type": "integer"
+          },
+          "tests_total": {
+            "type": "integer"
+          },
+          "typecheck": {
+            "type": "boolean"
+          },
+          "coverage_lines": {
+            "type": "number"
+          },
+          "coverage_branches": {
+            "type": "number"
+          }
         }
       }
     }

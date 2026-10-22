@@ -29,7 +29,11 @@ for a `.ts` hook when the test needs JSX for a wrapper). Shared fixtures go in `
 
 ## Conventions (match the existing tests)
 
-- Flat `it(...)` blocks, no `describe`. Behavioural names: `'shows loading feedback before showing an empty list'`.
+- **Match the file you extend.** Most test files use flat `it(...)` blocks without `describe`, so new
+  files do too. A file that already groups with `describe` keeps its grouping.
+- **One import per module.** Add names to the existing `import { ... } from 'vitest'` line instead
+  of a second import from the same module.
+- Behavioural names: `'shows loading feedback before showing an empty list'`.
 - **Design system is always mocked:** `vi.mock('<relative>/design-system', () => import('<relative>/design-system/mocks'))`.
   The mocks render native elements (`Button` → `<button>`, `Alert` → `data-testid="alert"`, `Input` → `<label>` + `<input>`).
   Read `src/design-system/mocks.tsx` when you need to know what an element renders.

@@ -60,6 +60,9 @@ for var in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY XDG_CONFIG_HOME; do
   [[ -n "${!var:-}" ]] && env_args+=("$var=${!var}")
 done
 
+task="${task}
+Turn budget: ${turns} turns."
+
 set +e
 env -i "${env_args[@]}" timeout --kill-after=30s "$limit" claude -p "$task" \
   --agent test-writer \

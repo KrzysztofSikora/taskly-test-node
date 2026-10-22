@@ -26,7 +26,11 @@ adapter, Zod 4. Tests never need a database, network or `.env`.
 
 ## Conventions (match the existing tests)
 
-- Flat `it(...)` blocks, no `describe`. Names state behaviour: `'returns 404 when the task does not exist'`.
+- **Match the file you extend.** Most test files use flat `it(...)` blocks without `describe`, so new
+  files do too. A file that already groups with `describe` keeps its grouping.
+- **One import per module.** Add names to the existing `import { ... } from 'vitest'` line instead
+  of a second import from the same module.
+- Names state behaviour: `'returns 404 when the task does not exist'`.
 - `it.each([...])` for input tables, with `%s` / `%j` in the name.
 - A local `setup()` function builds the unit under test and its fakes. No shared mutable state
   between tests. `afterEach(() => vi.restoreAllMocks())` when spying.
@@ -34,7 +38,8 @@ adapter, Zod 4. Tests never need a database, network or `.env`.
   (`'../src/features/todos/router.ts'`). Sources themselves use `.js`. Do not change that.
 - Types: tests are type-checked (`tsconfig.json` includes `tests/**`). Use real types from
   `src/features/todos/types.ts`. Prefer `vi.fn()` fakes typed via the interface (`TodoStore`)
-  over `as any`. Where a cast is unavoidable use `as unknown as T` locally.
+  over `as any` / `as never`. Where a cast is unavoidable use `as unknown as T` locally, with `T`
+  the real type (e.g. `as unknown as Database`).
 
 ## Recipes
 

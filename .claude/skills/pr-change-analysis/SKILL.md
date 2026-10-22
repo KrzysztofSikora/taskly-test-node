@@ -40,6 +40,7 @@ Give every testable file exactly one decision:
 | `create` | No `own_test` exists and the file has behaviour worth pinning: branching, validation, mapping, error handling, state transitions, user interaction, data fetching. |
 | `update` | `own_test` exists and the change adds or alters behaviour that the test does not cover yet, or the change breaks an existing assertion that encodes the *old intended* behaviour (the PR changed the behaviour on purpose). |
 | `skip` | Nothing new to pin: pure renames, formatting, comments, import reordering, type-only edits, logging text, or behaviour already asserted by `own_test` (say which test). Also trivial glue with no logic of its own. |
+| `deferred` | Worth testing, but not done in this run (budget or priority). Never call this `skip`: `skip` means nothing is worth testing. |
 | `blocked` | The behaviour cannot be unit-tested without changing production code (hard-wired globals, no seam for a dependency), or it needs a real database or network. Say what seam is missing. |
 
 Rules for deciding:
